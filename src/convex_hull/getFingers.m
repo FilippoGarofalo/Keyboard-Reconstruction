@@ -1,5 +1,5 @@
-function fingertips = getFingertips(img_RGB)
-    % GETFINGERTIPS Detects convex fingertip coordinates from a single frame.
+function fingertips = getFingers(img_RGB)
+    % GETFINGERS Detects convex fingertip coordinates from a single frame.
     %
     % Inputs:
     %   img_RGB    - A single image frame (Height x Width x 3 matrix)
