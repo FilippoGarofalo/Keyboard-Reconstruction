@@ -12,7 +12,7 @@ function [keyMap] = keysDetection(background_rect)
     
     % --- 2. COSTRUZIONE GRIGLIA CROMATICA ---
     % Ipotizziamo 21 tasti bianchi (3 ottave)
-    num_white = 21;
+    num_white = 52;
     white_w = w / num_white;
     keyMap = struct('id', {}, 'roi', {}, 'type', {}, 'noteName', {}, 'mask', {}, 'vertices', {});
     

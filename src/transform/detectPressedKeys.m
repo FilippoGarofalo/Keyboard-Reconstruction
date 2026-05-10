@@ -3,11 +3,11 @@ function [pressedNotes] = detectPressedKeys(current_rect, background_rect, keyMa
     
     % 1. Calcolo della differenza
     % Convertiamo in grigio per velocizzare
-    diffImg = abs(im2gray(current_rect) - im2gray(background_rect));
+    diffImg = abs(double(im2gray(current_rect)) - double(im2gray(background_rect)));
     
     % 2. Binarizzazione della differenza
     % Usiamo una soglia manuale (es. 50/255) per rilevare solo cambiamenti netti
-    bwDiff = imbinarize(diffImg, 50/255);
+    bwDiff = imbinarize(diffImg / 255, 50/255);
     
     % Pulizia per eliminare piccoli rumori
     bwDiff = imopen(bwDiff, strel('disk', 2));
