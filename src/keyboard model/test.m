@@ -2,9 +2,8 @@ repoRoot = fileparts(mfilename('fullpath'));
 addpath(fullfile(repoRoot, 'homography_white'));
 addpath(fullfile(repoRoot, 'virtual_keyboard'));
 
-videoPath = fullfile(repoRoot, '..', 'data', 'videos', ...
-    'Bitesize Piano - TWINKLE TWINKLE LITTLE STAR - Easy Piano Tutorial.mp4');
-framePath = fullfile(repoRoot, '..', 'data', 'videos', 'frame0.png');
+videoPath = fullfile(repoRoot, '..', '..', 'assets', 'Video.mp4');
+framePath = fullfile(repoRoot, '..', '..', 'assets', 'frame0.png');
 outputMatFile = fullfile(repoRoot, '..', 'H_white_calibration.mat');
 numWhiteKeys = 21;
 
