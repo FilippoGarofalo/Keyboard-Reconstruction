@@ -32,6 +32,7 @@ parser.addParameter('VisibleWhiteKeyHeightMm', 150, @(x) isnumeric(x) && isscala
 parser.addParameter('PixelsPerMm', 4, @(x) isnumeric(x) && isscalar(x) && x > 0);
 parser.addParameter('ImagePointsPx', [], @(x) isempty(x) || (isnumeric(x) && isequal(size(x), [4, 2])));
 parser.addParameter('OutputMatFile', 'H_white_calibration.mat', @(x) ischar(x) || isstring(x));
+parser.addParameter('FirstVisibleNote', 'A0', @(x) ischar(x) || isstring(x));
 parser.parse(varargin{:});
 params = parser.Results;
 
@@ -82,6 +83,7 @@ calibration.roiPolygonPx = imagePointsPx;
 calibration.roiMask = roiMask;
 calibration.roiBoundingBoxPx = roiBoundingBoxPx;
 calibration.pixelsPerMm = params.PixelsPerMm;
+calibration.firstVisibleNote = char(params.FirstVisibleNote);
 calibration.reprojection = reprojection;
 calibration.rectifiedImage = rectifiedImage;
 calibration.rectifiedImageSizePx = [size(rectifiedImage, 1), size(rectifiedImage, 2)];

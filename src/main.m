@@ -26,18 +26,41 @@ first_frame = readFrame(video_obj);
 video_obj.CurrentTime = 0; % Reset
 
 % Generiamo l'immagine rettificata di Flavio (vista dall'alto)
-pixelsPerMm = 2;
-% Assumiamo 52 tasti bianchi di larghezza standard 23.5mm
-planeSizeMm = [150, 52 * 23.5]; 
+% Usiamo i parametri della calibrazione invece di assumere 52 tasti
+vk = calib.virtualKeyboard;
+pixelsPerMm = calib.pixelsPerMm;
+planeSizeMm = [vk.keyboardHeightMm, vk.keyboardWidthMm];
 ref_rect = warp_image_inverse(first_frame, H, planeSizeMm, pixelsPerMm);
 
-% Mappiamo i tasti sull'immagine rettificata con la TUA funzione
-keyMap = keysDetection(ref_rect);
-
-% FIX: La tua funzione 'detectPressedKeys' cerca il campo 'BoundingBox', 
-% ma 'keysDetection' lo chiama 'roi'. Copiamo il dato per evitare crash!
-for i = 1:length(keyMap)
-    keyMap(i).BoundingBox = keyMap(i).roi;
+% Costruiamo keyMap direttamente da virtualKeyboard (bianchi + neri, gia'
+% modellati in coordinate rettificate dalla calibrazione).
+% Compat: i .mat vecchi non hanno il campo unificato allKeys.
+if isfield(vk, 'allKeys') && ~isempty(vk.allKeys)
+    allKeys = vk.allKeys;
+else
+    whiteKeys = vk.keys;
+    for i = 1:numel(whiteKeys), whiteKeys(i).type = 'white'; end
+    if isfield(vk, 'blackKeys') && ~isempty(vk.blackKeys)
+        blackKeys = vk.blackKeys;
+        for i = 1:numel(blackKeys), blackKeys(i).type = 'black'; end
+        % Allinea i campi per consentire la concatenazione
+        commonFields = intersect(fieldnames(whiteKeys), fieldnames(blackKeys));
+        extraW = setdiff(fieldnames(whiteKeys), commonFields);
+        extraB = setdiff(fieldnames(blackKeys), commonFields);
+        for f = 1:numel(extraW), [blackKeys.(extraW{f})] = deal([]); end
+        for f = 1:numel(extraB), [whiteKeys.(extraB{f})] = deal([]); end
+        allKeys = [whiteKeys(:); blackKeys(:)];
+    else
+        allKeys = whiteKeys(:);
+    end
+end
+keyMap = struct('id', {}, 'roi', {}, 'type', {}, 'vertices', {}, 'BoundingBox', {});
+for k = 1:numel(allKeys)
+    keyMap(k).id          = k;
+    keyMap(k).type        = allKeys(k).type;
+    keyMap(k).roi         = allKeys(k).boundingBoxPx;
+    keyMap(k).BoundingBox = allKeys(k).boundingBoxPx;
+    keyMap(k).vertices    = allKeys(k).polygonPx;
 end
 
 % Pre-calcoliamo la maschera ROI di Flavio per pulire l'input di Filippo
@@ -75,11 +98,29 @@ while hasFrame(video_obj)
         % 3. Convertiamo i millimetri nei pixel dell'immagine rettificata
         fingertips_rect_px = pts_mm * pixelsPerMm;
         
-        % Troviamo quali tasti contengono questi polpastrelli
+        % Troviamo quali tasti contengono questi polpastrelli.
+        % Policy: i neri vengono testati solo sulla colonna X (la punta del
+        % dito spesso cade in basso fuori dalla "lamella" del nero, ma il
+        % dito intende suonare il nero). Se nessun nero matcha, si cerca
+        % tra i bianchi col poligono completo.
         for f = 1:size(fingertips_rect_px, 1)
+            fx = fingertips_rect_px(f, 1);
+            fy = fingertips_rect_px(f, 2);
+            matchedBlack = false;
             for k = 1:length(keyMap)
-                if inpolygon(fingertips_rect_px(f,1), fingertips_rect_px(f,2), ...
-                             keyMap(k).vertices(:,1), keyMap(k).vertices(:,2))
+                if strcmp(keyMap(k).type, 'black')
+                    r = keyMap(k).BoundingBox; % [x y w h]
+                    if fx >= r(1) && fx <= r(1) + r(3)
+                        spatial_candidates = [spatial_candidates, keyMap(k).id];
+                        matchedBlack = true;
+                        break;
+                    end
+                end
+            end
+            if matchedBlack, continue; end
+            for k = 1:length(keyMap)
+                if strcmp(keyMap(k).type, 'white') && ...
+                        inpolygon(fx, fy, keyMap(k).vertices(:,1), keyMap(k).vertices(:,2))
                     spatial_candidates = [spatial_candidates, keyMap(k).id];
                 end
             end
