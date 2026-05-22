@@ -1,15 +1,17 @@
-function fingertips = getFingers(img_RGB)
+function [fingertips, skin_mask] = getFingers(img_RGB)
     % GETFINGERS Detects convex fingertip coordinates from a single frame.
     %
     % Inputs:
     %   img_RGB    - A single image frame (Height x Width x 3 matrix)
     %
     % Outputs:
-    %   fingertips - An N x 2 matrix of [x, y] coordinates representing 
+    %   fingertips - An N x 2 matrix of [x, y] coordinates representing
     %                the detected fingertips (the "red points").
+    %   skin_mask  - Logical H x W mask of skin pixels (post morphology).
 
-    % Initialize the output matrix
-    fingertips = []; 
+    % Initialize the outputs
+    fingertips = [];
+    skin_mask = false(size(img_RGB, 1), size(img_RGB, 2));
     
     % =====================================================================
     % PHASE 1: SKIN SEGMENTATION & MASKING
@@ -18,12 +20,16 @@ function fingertips = getFingers(img_RGB)
     Cb = img_YCbCr(:, :, 2); 
     Cr = img_YCbCr(:, :, 3); 
     
-    skin_mask = (Cb >= 100 & Cb <= 150) & (Cr >= 150 & Cr <= 200);
-    se = strel('disk', 5); 
-    solid_mask = imclose(skin_mask, se);
+    raw_skin = (Cb >= 100 & Cb <= 150) & (Cr >= 150 & Cr <= 200);
+    se = strel('disk', 5);
+    solid_mask = imclose(raw_skin, se);
     solid_mask = imfill(solid_mask, 'holes');
-    solid_mask = bwareaopen(solid_mask, 50); 
-    
+    solid_mask = bwareaopen(solid_mask, 50);
+
+    % Export the cleaned skin mask so callers can reuse it (e.g. to
+    % subtract skin pixels from a frame-difference computation).
+    skin_mask = solid_mask;
+
     [y_img, x_img] = find(solid_mask);
     
     if isempty(x_img)
