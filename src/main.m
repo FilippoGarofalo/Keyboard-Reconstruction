@@ -40,19 +40,29 @@ if isfield(vk, 'allKeys') && ~isempty(vk.allKeys)
 else
     whiteKeys = vk.keys;
     for i = 1:numel(whiteKeys), whiteKeys(i).type = 'white'; end
+
+    % Se vk.blackKeys non c'e' (calibrazioni vecchie con solo bianchi),
+    % costruiamo i neri al volo dal modello dei bianchi e dal startNote
+    % salvato in calibration. Cosi' main.m funziona senza rigenerare il .mat.
     if isfield(vk, 'blackKeys') && ~isempty(vk.blackKeys)
         blackKeys = vk.blackKeys;
-        for i = 1:numel(blackKeys), blackKeys(i).type = 'black'; end
-        % Allinea i campi per consentire la concatenazione
-        commonFields = intersect(fieldnames(whiteKeys), fieldnames(blackKeys));
-        extraW = setdiff(fieldnames(whiteKeys), commonFields);
-        extraB = setdiff(fieldnames(blackKeys), commonFields);
-        for f = 1:numel(extraW), [blackKeys.(extraW{f})] = deal([]); end
-        for f = 1:numel(extraB), [whiteKeys.(extraB{f})] = deal([]); end
-        allKeys = [whiteKeys(:); blackKeys(:)];
     else
-        allKeys = whiteKeys(:);
+        if isfield(calib, 'firstVisibleNote') && ~isempty(calib.firstVisibleNote)
+            startNote = calib.firstVisibleNote;
+        else
+            startNote = 'A0';  % default 88-tasti
+        end
+        blackKeys = build_virtual_black_keys(vk, startNote);
     end
+    for i = 1:numel(blackKeys), blackKeys(i).type = 'black'; end
+
+    % Allinea i campi per consentire la concatenazione
+    commonFields = intersect(fieldnames(whiteKeys), fieldnames(blackKeys));
+    extraW = setdiff(fieldnames(whiteKeys), commonFields);
+    extraB = setdiff(fieldnames(blackKeys), commonFields);
+    for f = 1:numel(extraW), [blackKeys.(extraW{f})] = deal([]); end
+    for f = 1:numel(extraB), [whiteKeys.(extraB{f})] = deal([]); end
+    allKeys = [whiteKeys(:); blackKeys(:)];
 end
 keyMap = struct('id', {}, 'roi', {}, 'type', {}, 'vertices', {}, 'BoundingBox', {});
 for k = 1:numel(allKeys)
@@ -74,6 +84,40 @@ mask_3D = repmat(uint8(roi_mask), 1, 1, 3);
 %% 4. Loop di Analisi Video
 fig = figure('Name', 'Keyboard Reconstruction - Analisi Integrata', 'WindowStyle', 'normal');
 ax = axes('Parent', fig);
+
+% Finestra di debug: diff grayscale + maschere binarie per-tipo
+DEBUG_DIFF = true;
+if DEBUG_DIFF
+    % Calcoliamo la dimensione del frame rettificato per inizializzare gli
+    % assi con la dimensione corretta (altrimenti rimangono 1x1 e si vede
+    % solo un quadratino nero).
+    recH = max(1, round(planeSizeMm(1) * pixelsPerMm));
+    recW = max(1, round(planeSizeMm(2) * pixelsPerMm));
+
+    figDebug   = figure('Name', 'Debug: Frame Difference', 'WindowStyle', 'normal');
+    axSkin     = subplot(4, 1, 1, 'Parent', figDebug);
+    axDiff     = subplot(4, 1, 2, 'Parent', figDebug);
+    axBwWhite  = subplot(4, 1, 3, 'Parent', figDebug);
+    axBwBlack  = subplot(4, 1, 4, 'Parent', figDebug);
+
+    % Pannello 1: frame rettificato con skin mask in rosso semi-trasparente
+    hSkinImg = imshow(zeros(recH, recW, 3, 'uint8'), 'Parent', axSkin);
+    title(axSkin, 'Skin mask rettificata (rosso) su frame');
+
+    % Diff grayscale: imagesc auto-scala il range, cosi' anche valori bassi
+    % (post skin-mask la diff e' tipicamente 10-40 su 255) si vedono.
+    hDiff = imagesc(zeros(recH, recW), 'Parent', axDiff);
+    axis(axDiff, 'image'); axis(axDiff, 'off');
+    colormap(axDiff, 'hot');
+    colorbar(axDiff);
+    title(axDiff, 'Diff grayscale (post skin-mask)');
+
+    hBwWhite = imshow(false(recH, recW), 'Parent', axBwWhite);
+    title(axBwWhite, 'BW Diff - soglia bianchi');
+
+    hBwBlack = imshow(false(recH, recW), 'Parent', axBwBlack);
+    title(axBwBlack, 'BW Diff - soglia neri');
+end
 disp('Inizio processamento video...');
 
 while hasFrame(video_obj)
@@ -84,7 +128,7 @@ while hasFrame(video_obj)
     curr_rect = warp_image_inverse(frame, H, planeSizeMm, pixelsPerMm);
     
     % --- B. COMPONENTE SPAZIALE: Candidati (Filippo) ---
-    fingertips_img = getFingers(frame .* mask_3D); 
+    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D);
     
     spatial_candidates = [];
     fingertips_rect_px = [];
@@ -98,11 +142,14 @@ while hasFrame(video_obj)
         % 3. Convertiamo i millimetri nei pixel dell'immagine rettificata
         fingertips_rect_px = pts_mm * pixelsPerMm;
         
-        % Troviamo quali tasti contengono questi polpastrelli.
-        % Policy: i neri vengono testati solo sulla colonna X (la punta del
-        % dito spesso cade in basso fuori dalla "lamella" del nero, ma il
-        % dito intende suonare il nero). Se nessun nero matcha, si cerca
-        % tra i bianchi col poligono completo.
+        % Policy: si testa prima il nero (bounding box X e Y, con tolleranza
+        % in Y per assorbire la PARALLASSE (i tasti neri sono ~10 mm piu'
+        % alti del piano dei bianchi su cui e' calibrata H, quindi il
+        % fingertip su un nero si proietta piu' in avanti del previsto).
+        % Solo se nessun nero matcha si passa ai bianchi col poligono.
+        % 80 px ~ 20 mm: la zona fy > 460 px (>~115 mm dal back) resta
+        % comunque territorio bianco puro.
+        blackYTolerancePx = 80;
         for f = 1:size(fingertips_rect_px, 1)
             fx = fingertips_rect_px(f, 1);
             fy = fingertips_rect_px(f, 2);
@@ -110,27 +157,53 @@ while hasFrame(video_obj)
             for k = 1:length(keyMap)
                 if strcmp(keyMap(k).type, 'black')
                     r = keyMap(k).BoundingBox; % [x y w h]
-                    if fx >= r(1) && fx <= r(1) + r(3)
+                    % Match solo se il dito cade DENTRO la lamella del nero
+                    % (sia in X sia in Y, con piccola tolleranza in Y).
+                    if fx >= r(1) && fx <= r(1) + r(3) && ...
+                            fy >= r(2) && fy <= r(2) + r(4) + blackYTolerancePx
                         spatial_candidates = [spatial_candidates, keyMap(k).id];
                         matchedBlack = true;
                         break;
                     end
                 end
             end
-            if matchedBlack, continue; end
+            if matchedBlack
+                if DEBUG_DIFF
+                    fprintf('  finger #%d -> BLACK fy=%.0f fx=%.0f\n', f, fy, fx);
+                end
+                continue;
+            end
+            matchedWhite = false;
             for k = 1:length(keyMap)
                 if strcmp(keyMap(k).type, 'white') && ...
                         inpolygon(fx, fy, keyMap(k).vertices(:,1), keyMap(k).vertices(:,2))
                     spatial_candidates = [spatial_candidates, keyMap(k).id];
+                    matchedWhite = true;
+                    break; % un dito sta su UN solo tasto bianco
                 end
+            end
+            if DEBUG_DIFF && ~matchedWhite
+                fprintf('  finger #%d -> NO MATCH  fy=%.0f fx=%.0f\n', f, fy, fx);
             end
         end
     end
     spatial_candidates = unique(spatial_candidates);
 
     % --- C. COMPONENTE TEMPORALE: Conferma (Emanuele) ---
-    % La tua funzione calcola la differenza sull'immagine di Flavio
-    temporal_candidates = detectPressedKeys(curr_rect, ref_rect, keyMap);
+    % Rettifichiamo la skin mask con la stessa omografia del frame in modo
+    % da poter sottrarre i pixel di pelle dalla frame-difference (altrimenti
+    % il dito stesso viene contato come "tasto premuto").
+    skin_mask_rect = false(size(curr_rect, 1), size(curr_rect, 2));
+    if ~isempty(skin_mask_img) && any(skin_mask_img(:))
+        warped = warp_image_inverse(uint8(skin_mask_img) * 255, ...
+                                    H, planeSizeMm, pixelsPerMm);
+        skin_mask_rect = warped > 127;
+    end
+    if DEBUG_DIFF
+        [temporal_candidates, diffDebug] = detectPressedKeys(curr_rect, ref_rect, keyMap, skin_mask_rect);
+    else
+        temporal_candidates = detectPressedKeys(curr_rect, ref_rect, keyMap, skin_mask_rect);
+    end
     
     % --- D. INTERSEZIONE (La vera magia) ---
     % Il tasto è premuto SOLO SE Filippo vede il dito E tu vedi il movimento
@@ -161,6 +234,42 @@ while hasFrame(video_obj)
                   'FaceColor', col, 'FaceAlpha', 0.4, 'EdgeColor', col, 'LineWidth', 2);
     end
     hold(ax, 'off');
+
+    % --- F. DEBUG: visualizzazione frame difference ---
+    if DEBUG_DIFF
+        % Pannello 1: frame rettificato con la skin mask tinta in rosso.
+        % Cosi' vediamo se la mask copre davvero la mano dopo la rettifica.
+        overlay = curr_rect;
+        if ~isa(overlay, 'uint8'); overlay = im2uint8(overlay); end
+        if size(overlay, 3) == 1; overlay = repmat(overlay, 1, 1, 3); end
+        m = logical(skin_mask_rect);
+        if any(m(:))
+            R = overlay(:,:,1); G = overlay(:,:,2); B = overlay(:,:,3);
+            % Alpha-blend con rosso pieno (255, 0, 0) al 50%
+            R(m) = uint8(0.5 * 255 + 0.5 * double(R(m)));
+            G(m) = uint8(0.5 * 0   + 0.5 * double(G(m)));
+            B(m) = uint8(0.5 * 0   + 0.5 * double(B(m)));
+            overlay(:,:,1) = R; overlay(:,:,2) = G; overlay(:,:,3) = B;
+        end
+        set(hSkinImg, 'CData', overlay);
+
+        % diff: passiamo double cosi' imagesc auto-scala il range visibile
+        % (i valori della diff post skin-mask sono tipicamente molto bassi).
+        set(hDiff,    'CData', diffDebug.diff);
+        set(hBwWhite, 'CData', diffDebug.bwWhite);
+        set(hBwBlack, 'CData', diffDebug.bwBlack);
+        % Stampa a console la % per i candidati spaziali (vediamo se i neri
+        % sono vicini a passare la soglia o lontanissimi).
+        if ~isempty(spatial_candidates)
+            for sc = spatial_candidates(:)'
+                fprintf('  key %2d (%s): ratio=%.3f  thresh=%.3f\n', ...
+                    sc, keyMap(sc).type, diffDebug.perKeyRatio(sc), ...
+                    (strcmp(keyMap(sc).type,'black')) * diffDebug.blackPixelPercent + ...
+                    (~strcmp(keyMap(sc).type,'black')) * diffDebug.whitePixelPercent);
+            end
+        end
+    end
+
     drawnow limitrate;
 end
 disp('Elaborazione completata!');
