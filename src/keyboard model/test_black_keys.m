@@ -26,7 +26,7 @@ calibration = data.calibration;
 % Se la calibrazione contiene il campo .firstVisibleNote (calibrazioni
 % nuove), build_virtual_keyboard lo usa in automatico. Qui forziamo 'F'
 % per essere robusti anche con .mat vecchi privi del campo.
-START_NOTE = 'F';
+START_NOTE = 'C';
 virtualKeyboard = build_virtual_keyboard(calibration, 'StartNote', START_NOTE);
 
 numWhite = numel(virtualKeyboard.whiteKeys);

@@ -5,7 +5,7 @@ addpath(fullfile(repoRoot, 'virtual_keyboard'));
 videoPath = fullfile(repoRoot, '..', '..', 'assets', 'Video.mp4');
 framePath = fullfile(repoRoot, '..', '..', 'assets', 'frame0.png');
 outputMatFile = fullfile(repoRoot, '..', 'H_white_calibration.mat');
-numWhiteKeys = 21;
+numWhiteKeys = 12;
 
 calibration = calibrate_H_white_from_video(videoPath, numWhiteKeys, ...
     'TimeSeconds', 2.0, ...
