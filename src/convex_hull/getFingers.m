@@ -20,7 +20,7 @@ function [fingertips, skin_mask] = getFingers(img_RGB)
     Cb = img_YCbCr(:, :, 2); 
     Cr = img_YCbCr(:, :, 3); 
     
-    raw_skin = (Cb >= 100 & Cb <= 150) & (Cr >= 150 & Cr <= 200);
+    raw_skin = (Cb >= 77 & Cb <= 127) & (Cr >= 133 & Cr <= 180);
     se = strel('disk', 5);
     solid_mask = imclose(raw_skin, se);
     solid_mask = imfill(solid_mask, 'holes');
@@ -30,44 +30,38 @@ function [fingertips, skin_mask] = getFingers(img_RGB)
     % subtract skin pixels from a frame-difference computation).
     skin_mask = solid_mask;
 
-    [y_img, x_img] = find(solid_mask);
-    
-    if isempty(x_img)
-        return; % Exit early and return empty array if no skin is found
+    if ~any(solid_mask(:))
+        return;
     end
-    
+
     % =====================================================================
-    % PHASE 2: 1D CLUSTERING (HAND SEPARATION)
+    % PHASE 2: HAND SEPARATION VIA CONNECTED COMPONENTS
     % =====================================================================
-    split_threshold = mean(x_img); 
-    for iter = 1:10
-        left_pts = x_img(x_img <= split_threshold);
-        right_pts = x_img(x_img > split_threshold);
-        if isempty(left_pts) || isempty(right_pts); break; end
-        
-        center_left = mean(left_pts);
-        center_right = mean(right_pts);
-        new_threshold = (center_left + center_right) / 2;
-        if abs(split_threshold - new_threshold) < 0.5; break; end
-        split_threshold = new_threshold;
+    % Keep only the two largest skin blobs (one per hand).
+    % All smaller blobs (reflections, shadows, noise) are discarded before
+    % the convex hull is computed, preventing spurious fingertip detections.
+    CC    = bwconncomp(solid_mask);
+    stats = regionprops(CC, 'Area', 'PixelIdxList');
+    if isempty(stats)
+        return;
     end
-    
-    % Determine if we are tracking one or two hands
-    if exist('center_left', 'var') && exist('center_right', 'var') && (center_right - center_left > 100)
-        left_hand_idx = x_img <= split_threshold;
-        right_hand_idx = x_img > split_threshold;
-        hand_points = { ...
-            [x_img(left_hand_idx), -y_img(left_hand_idx)], ... 
-            [x_img(right_hand_idx), -y_img(right_hand_idx)] ... 
-        };
-    else
-        hand_points = {[x_img, -y_img], []};
+    [~, order] = sort([stats.Area], 'descend');
+
+    MIN_HAND_AREA = 1000; % px — blobs smaller than this are noise, not hands
+
+    hand_points = {};
+    for h = 1:numel(order)
+        if stats(order(h)).Area < MIN_HAND_AREA
+            break; % ordinati per area decrescente: sotto soglia, tutti i resto lo sono
+        end
+        [hy, hx] = ind2sub(size(solid_mask), stats(order(h)).PixelIdxList);
+        hand_points{end+1} = [hx(:), -hy(:)];
     end
     
     % =====================================================================
     % PHASE 3: CONVEX HULL & FINGERTIP EXTRACTION
     % =====================================================================
-    for h = 1:2
+    for h = 1:numel(hand_points)
         points = hand_points{h};
         if isempty(points) || size(points, 1) < 3; continue; end
         
@@ -126,22 +120,33 @@ function [fingertips, skin_mask] = getFingers(img_RGB)
         end
         
         % 4. Density Clustering (Merge points closer than 20px)
-        min_dist = 20; 
-        
+        % Skip points too close to the frame boundary: they are hull
+        % artifacts caused by a hand truncated at the image edge, not
+        % real fingertips.
+        min_dist      = 20;
+        boundary_margin = 20; % px from any frame edge
+        img_w = size(img_RGB, 2);
+        img_h = size(img_RGB, 1);
+
         for k = 1:length(raw_tip_x)
+            tx = raw_tip_x(k);
+            ty = raw_tip_y_img(k);
+            if tx < boundary_margin || tx > img_w - boundary_margin || ...
+               ty < boundary_margin || ty > img_h - boundary_margin
+                continue;
+            end
+
             is_new = true;
-            for m = 1:size(fingertips, 1) % Compare against already saved tips
-                dist = sqrt((raw_tip_x(k) - fingertips(m, 1))^2 + (raw_tip_y_img(k) - fingertips(m, 2))^2);
-                
+            for m = 1:size(fingertips, 1)
+                dist = sqrt((tx - fingertips(m, 1))^2 + (ty - fingertips(m, 2))^2);
                 if dist < min_dist
-                    is_new = false; 
-                    break; 
+                    is_new = false;
+                    break;
                 end
             end
-            
-            % If it passed the distance check, save it to the output array
+
             if is_new
-                fingertips = [fingertips; raw_tip_x(k), raw_tip_y_img(k)];
+                fingertips = [fingertips; tx, ty];
             end
         end
     end

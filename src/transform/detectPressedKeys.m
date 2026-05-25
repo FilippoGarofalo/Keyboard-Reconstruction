@@ -25,8 +25,8 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     % permissive sia in luminanza sia in percentuale di pixel cambiati.
     whiteDiffThresh    = 50/255;
     blackDiffThresh    = 35/255;   % alzato da 25/255 per ridurre falsi positivi
-    whitePixelPercent  = 0.15;
-    blackPixelPercent  = 0.10;     % alzato da 0.07 per ridurre falsi positivi
+    whitePixelPercent  = 0.10;
+    blackPixelPercent  = 0.15;
 
     bwDiffWhite = imbinarize(diffImg / 255, whiteDiffThresh);
     bwDiffBlack = imbinarize(diffImg / 255, blackDiffThresh);
@@ -35,18 +35,35 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     bwDiffWhite = imopen(bwDiffWhite, se);
     bwDiffBlack = imopen(bwDiffBlack, se);
 
+    % Usa solo il terzo superiore della tastiera per il calcolo del ratio.
+    % In questa zona il dito entra a contatto con il tasto; le ombre del
+    % palmo e i riflessi della mano si concentrano nella parte inferiore
+    % e vengono cosi' esclusi dall'analisi.
+    TOP_FRACTION  = 1/3;
+    analysis_rows = floor(size(diffImg, 1) * TOP_FRACTION);
+
     pressedNotes = [];
     perKeyRatio = zeros(1, length(keyMap));
 
     % 3. Controllo ROI per ogni tasto nella keyMap
     for i = 1:length(keyMap)
-        bb = keyMap(i).BoundingBox;
+        bb = keyMap(i).BoundingBox; % [x y w h]
+
+        % Clip verticale: teniamo solo la parte del tasto che cade
+        % nel terzo superiore della tastiera rettificata.
+        y0     = bb(2);
+        h_clip = min(bb(4), max(0, analysis_rows - y0));
+        if h_clip <= 0
+            perKeyRatio(i) = 0;
+            continue;
+        end
+        bb_clipped = [bb(1), y0, bb(3), h_clip];
 
         if strcmp(keyMap(i).type, 'black')
-            keyROI = imcrop(bwDiffBlack, bb);
+            keyROI = imcrop(bwDiffBlack, bb_clipped);
             pixelPercent = blackPixelPercent;
         else
-            keyROI = imcrop(bwDiffWhite, bb);
+            keyROI = imcrop(bwDiffWhite, bb_clipped);
             pixelPercent = whitePixelPercent;
         end
 
@@ -63,6 +80,7 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
             'bwWhite', bwDiffWhite, ...
             'bwBlack', bwDiffBlack, ...
             'perKeyRatio', perKeyRatio, ...
+            'analysisRows', analysis_rows, ...
             'whiteDiffThresh', whiteDiffThresh, ...
             'blackDiffThresh', blackDiffThresh, ...
             'whitePixelPercent', whitePixelPercent, ...
