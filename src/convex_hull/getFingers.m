@@ -1,8 +1,12 @@
-function [fingertips, skin_mask] = getFingers(img_RGB)
+function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
     % GETFINGERS Detects convex fingertip coordinates from a single frame.
     %
     % Inputs:
-    %   img_RGB    - A single image frame (Height x Width x 3 matrix)
+    %   img_RGB     - A single image frame (Height x Width x 3 matrix)
+    %   motion_mask - (Optional) logical H x W mask of moving pixels. When
+    %                 provided, the skin mask is ANDed with it so that static
+    %                 skin-colored regions (e.g. ivory keys) cannot be mistaken
+    %                 for hands. Hands move; keys do not.
     %
     % Outputs:
     %   fingertips - An N x 2 matrix of [x, y] coordinates representing
@@ -21,6 +25,14 @@ function [fingertips, skin_mask] = getFingers(img_RGB)
     Cr = img_YCbCr(:, :, 3); 
     
     raw_skin = (Cb >= 77 & Cb <= 127) & (Cr >= 133 & Cr <= 180);
+
+    % La mano si muove, i tasti no: intersechiamo la pelle con la maschera di
+    % movimento (se fornita), eliminando i tasti color avorio fermi che
+    % altrimenti formerebbero grandi blob "pelle" e finte dita.
+    if nargin >= 2 && ~isempty(motion_mask)
+        raw_skin = raw_skin & logical(motion_mask);
+    end
+
     se = strel('disk', 5);
     solid_mask = imclose(raw_skin, se);
     solid_mask = imfill(solid_mask, 'holes');
@@ -45,14 +57,25 @@ function [fingertips, skin_mask] = getFingers(img_RGB)
     if isempty(stats)
         return;
     end
-    [~, order] = sort([stats.Area], 'descend');
+    areas = [stats.Area];
+    [~, order] = sort(areas, 'descend');
 
-    MIN_HAND_AREA = 1000; % px — blobs smaller than this are noise, not hands
+    MIN_HAND_AREA = 1000; % px — pavimento assoluto: sotto e' rumore, non una mano
+    MAX_HANDS     = 2;    % al massimo due mani: i blob extra sono riflessi/ombre
+    REL_HAND_FRAC = 0.4;  % un blob conta come mano solo se >= 40% del blob dominante:
+                          % scarta riflessi/ombre lontani (piccoli), ma tiene una
+                          % vera seconda mano (area comparabile alla prima).
+
+    % Soglia d'area combinata: pavimento assoluto + frazione del blob piu' grande.
+    area_floor = max(MIN_HAND_AREA, REL_HAND_FRAC * areas(order(1)));
 
     hand_points = {};
     for h = 1:numel(order)
-        if stats(order(h)).Area < MIN_HAND_AREA
-            break; % ordinati per area decrescente: sotto soglia, tutti i resto lo sono
+        if numel(hand_points) >= MAX_HANDS
+            break; % gia' prese le mani piu' grandi, il resto e' rumore
+        end
+        if areas(order(h)) < area_floor
+            break; % ordinati per area decrescente: sotto soglia, anche il resto lo e'
         end
         [hy, hx] = ind2sub(size(solid_mask), stats(order(h)).PixelIdxList);
         hand_points{end+1} = [hx(:), -hy(:)];
