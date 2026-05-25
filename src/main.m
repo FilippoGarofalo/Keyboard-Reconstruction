@@ -12,15 +12,17 @@ addpath(genpath(script_dir));
 % Modifica questi valori per adattarli al tuo setup.
 % Imposta FORCE_RECALIBRATE = true per ricalibr forzando la sovrascrittura del .mat.
 FORCE_RECALIBRATE        = false;
-NUM_WHITE_KEYS           = 14;
+NUM_WHITE_KEYS           = 21;
 FIRST_VISIBLE_NOTE       = 'F';
 WHITE_KEY_WIDTH_MM       = 23.5;
 VISIBLE_WHITE_HEIGHT_MM  = 150;
 PIXELS_PER_MM            = 4;
 CALIB_TIME_SECONDS       = 2.0;
+MOTION_DIFF_THRESH       = 30;   % luminanza (0..255): soglia movimento mano vs sfondo statico (alza per meno falsi)
+MOTION_DILATE_PX         = 5;    % raggio dilatazione maschera movimento (riduci per meno sbordo sui tasti vicini)
 
-video_path      = fullfile(script_dir, '..', 'assets', 'Video.mp4');
-calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration.mat');
+video_path      = fullfile(script_dir, '..', 'assets', 'Video2.mp4');
+calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration2.mat');
 
 if ~isfile(video_path)
     error('File video non trovato: %s', video_path);
@@ -58,6 +60,10 @@ video_obj = VideoReader(video_path);
 %% 4. Setup Immagine Rettificata e KeyMap (Flavio + Emanuele)
 first_frame = readFrame(video_obj);
 video_obj.CurrentTime = 0; % Reset
+
+% Background statico in coordinate raw (video) per la maschera di movimento.
+% I tasti sono fermi qui dentro; solo la mano cambia rispetto a questo frame.
+background_gray = im2gray(first_frame);
 
 % Generiamo l'immagine rettificata di Flavio (vista dall'alto)
 % Usiamo i parametri della calibrazione invece di assumere 52 tasti
@@ -120,7 +126,7 @@ fig = figure('Name', 'Keyboard Reconstruction - Analisi Integrata', 'WindowStyle
 ax = axes('Parent', fig);
 
 % Finestra di debug: diff grayscale + maschere binarie per-tipo
-DEBUG_DIFF = true;
+DEBUG_DIFF = false;
 if DEBUG_DIFF
     % Calcoliamo la dimensione del frame rettificato per inizializzare gli
     % assi con la dimensione corretta (altrimenti rimangono 1x1 e si vede
@@ -162,7 +168,14 @@ while hasFrame(video_obj)
     curr_rect = warp_image_inverse(frame, H, planeSizeMm, pixelsPerMm);
     
     % --- B. COMPONENTE SPAZIALE: Candidati (Filippo) ---
-    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D);
+    % Maschera di movimento: la mano si muove, i tasti no. Intersecando la
+    % pelle con questa maschera dentro getFingers, i tasti color avorio fermi
+    % non possono piu' essere scambiati per dita (falsi candidati a sinistra).
+    motion_mask = imabsdiff(im2gray(frame), background_gray) > MOTION_DIFF_THRESH;
+    motion_mask = imclose(motion_mask, strel('disk', 5));
+    motion_mask = imdilate(motion_mask, strel('disk', MOTION_DILATE_PX));
+
+    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D, motion_mask);
     
     spatial_candidates = [];
     fingertips_rect_px = [];
