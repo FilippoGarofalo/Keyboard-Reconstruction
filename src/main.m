@@ -8,20 +8,54 @@ close all; clear; clc;
 script_dir = fileparts(mfilename('fullpath')); 
 addpath(genpath(script_dir)); 
 
-%% 2. Inizializzazione Video e Calibrazione (Flavio)
-video_path = fullfile(script_dir, '..', 'assets', 'Video.mp4'); 
+%% 2. Parametri
+% Modifica questi valori per adattarli al tuo setup.
+% Imposta FORCE_RECALIBRATE = true per ricalibr forzando la sovrascrittura del .mat.
+FORCE_RECALIBRATE        = false;
+NUM_WHITE_KEYS           = 14;
+FIRST_VISIBLE_NOTE       = 'F';
+WHITE_KEY_WIDTH_MM       = 23.5;
+VISIBLE_WHITE_HEIGHT_MM  = 150;
+PIXELS_PER_MM            = 4;
+CALIB_TIME_SECONDS       = 2.0;
+
+video_path      = fullfile(script_dir, '..', 'assets', 'Video.mp4');
+calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration.mat');
+
 if ~isfile(video_path)
-    error('File video non trovato! Controlla il percorso.');
+    error('File video non trovato: %s', video_path);
 end
+
+%% 3. Calibrazione
+if ~isfile(calib_file_path) || FORCE_RECALIBRATE
+    fprintf('Calibrazione: %d tasti bianchi, nota iniziale ''%s''...\n', ...
+        NUM_WHITE_KEYS, FIRST_VISIBLE_NOTE);
+    frame_path = fullfile(script_dir, '..', 'assets', 'frame0.png');
+    calib = calibrate_H_white_from_video(video_path, NUM_WHITE_KEYS, ...
+        'TimeSeconds',             CALIB_TIME_SECONDS, ...
+        'AutoSkipDarkFrames',      true, ...
+        'DarkFrameThreshold',      5, ...
+        'MaxAutoSkipFrames',       300, ...
+        'SaveFramePath',           frame_path, ...
+        'WhiteKeyWidthMm',         WHITE_KEY_WIDTH_MM, ...
+        'VisibleWhiteKeyHeightMm', VISIBLE_WHITE_HEIGHT_MM, ...
+        'PixelsPerMm',             PIXELS_PER_MM, ...
+        'FirstVisibleNote',        FIRST_VISIBLE_NOTE, ...
+        'OutputMatFile',           '');
+    calib.virtualKeyboard = build_virtual_keyboard(calib, 'StartNote', FIRST_VISIBLE_NOTE);
+    calibration = calib;
+    save(calib_file_path, 'calibration');
+    fprintf('Calibrazione completata e salvata: %s\n', calib_file_path);
+else
+    disp('Calibrazione esistente trovata, caricamento...');
+    tmp = load(calib_file_path);
+    calib = tmp.calibration;
+end
+
+H = calib.H_white;
 video_obj = VideoReader(video_path);
 
-disp('Caricamento modello della tastiera...');
-calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration.mat');
-calib_data = load(calib_file_path);
-calib = calib_data.calibration; 
-H = calib.H_white; % Matrice di omografia di Flavio
-
-%% 3. Setup Immagine Rettificata e KeyMap (Flavio + Emanuele)
+%% 4. Setup Immagine Rettificata e KeyMap (Flavio + Emanuele)
 first_frame = readFrame(video_obj);
 video_obj.CurrentTime = 0; % Reset
 
@@ -81,7 +115,7 @@ else, roi_poly = calib.cornersPx; end
 roi_mask = build_keyboard_roi_mask(img_size, roi_poly);
 mask_3D = repmat(uint8(roi_mask), 1, 1, 3);
 
-%% 4. Loop di Analisi Video
+%% 5. Loop di Analisi Video
 fig = figure('Name', 'Keyboard Reconstruction - Analisi Integrata', 'WindowStyle', 'normal');
 ax = axes('Parent', fig);
 
@@ -149,7 +183,12 @@ while hasFrame(video_obj)
         % Solo se nessun nero matcha si passa ai bianchi col poligono.
         % 80 px ~ 20 mm: la zona fy > 460 px (>~115 mm dal back) resta
         % comunque territorio bianco puro.
+        % Tolleranza Y per i neri: le nocche rilevate dall'hull si proiettano
+        % piu' in avanti del polpastrello reale (parallasse + hull = nocche).
+        % Tolleranza Y per i bianchi: stessa causa, le nocche cadono appena
+        % fuori dal poligono verso il bordo anteriore della tastiera.
         blackYTolerancePx = 80;
+        whiteYTolerancePx = 60;
         for f = 1:size(fingertips_rect_px, 1)
             fx = fingertips_rect_px(f, 1);
             fy = fingertips_rect_px(f, 2);
@@ -157,8 +196,6 @@ while hasFrame(video_obj)
             for k = 1:length(keyMap)
                 if strcmp(keyMap(k).type, 'black')
                     r = keyMap(k).BoundingBox; % [x y w h]
-                    % Match solo se il dito cade DENTRO la lamella del nero
-                    % (sia in X sia in Y, con piccola tolleranza in Y).
                     if fx >= r(1) && fx <= r(1) + r(3) && ...
                             fy >= r(2) && fy <= r(2) + r(4) + blackYTolerancePx
                         spatial_candidates = [spatial_candidates, keyMap(k).id];
@@ -173,13 +210,17 @@ while hasFrame(video_obj)
                 end
                 continue;
             end
+            % Per i bianchi usiamo fy spostato indietro di whiteYTolerancePx
+            % cosi' le nocche (proiettate troppo in avanti) rientrano nel
+            % poligono del tasto corretto.
+            fy_white = max(0, fy - whiteYTolerancePx);
             matchedWhite = false;
             for k = 1:length(keyMap)
                 if strcmp(keyMap(k).type, 'white') && ...
-                        inpolygon(fx, fy, keyMap(k).vertices(:,1), keyMap(k).vertices(:,2))
+                        inpolygon(fx, fy_white, keyMap(k).vertices(:,1), keyMap(k).vertices(:,2))
                     spatial_candidates = [spatial_candidates, keyMap(k).id];
                     matchedWhite = true;
-                    break; % un dito sta su UN solo tasto bianco
+                    break;
                 end
             end
             if DEBUG_DIFF && ~matchedWhite
@@ -221,7 +262,7 @@ while hasFrame(video_obj)
     % 2. Disegniamo i CANDIDATI SPAZIALI (Solo tocco, no pressione) in BLU TRATTEGGIATO
     for id = 1:length(spatial_candidates)
         r = keyMap(spatial_candidates(id)).roi;
-        rectangle('Position', r, 'EdgeColor', 'b', 'LineWidth', 2, 'LineStyle', '--');
+        rectangle('Parent', ax, 'Position', r, 'EdgeColor', 'b', 'LineWidth', 2, 'LineStyle', '--');
     end
 
     % 3. Disegniamo I TASTI PREMUTI CONFERMATI (Intersezione Spazio + Tempo) CON RIEMPIMENTO
@@ -258,6 +299,12 @@ while hasFrame(video_obj)
         set(hDiff,    'CData', diffDebug.diff);
         set(hBwWhite, 'CData', diffDebug.bwWhite);
         set(hBwBlack, 'CData', diffDebug.bwBlack);
+        % Linea orizzontale ciano che mostra il confine del terzo superiore
+        % usato dalla frame difference (tutto sotto viene ignorato).
+        ar = diffDebug.analysisRows;
+        hold(axDiff,    'on'); yline(axDiff,    ar, 'c-', 'LineWidth', 1.5); hold(axDiff,    'off');
+        hold(axBwWhite, 'on'); yline(axBwWhite, ar, 'c-', 'LineWidth', 1.5); hold(axBwWhite, 'off');
+        hold(axBwBlack, 'on'); yline(axBwBlack, ar, 'c-', 'LineWidth', 1.5); hold(axBwBlack, 'off');
         % Stampa a console la % per i candidati spaziali (vediamo se i neri
         % sono vicini a passare la soglia o lontanissimi).
         if ~isempty(spatial_candidates)
