@@ -23,9 +23,14 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     % I tasti neri partono da luminanza bassa: il movimento del tasto
     % produce variazioni molto piu' piccole, quindi servono soglie piu'
     % permissive sia in luminanza sia in percentuale di pixel cambiati.
-    whiteDiffThresh    = 50/255;
+    % NB: la premuta finale e' spaziale AND temporale, quindi allentare il
+    % temporale e' a basso rischio: un tasto diventa "premuto" solo se ha gia'
+    % un dito candidato sopra. I bianchi venivano persi perche' il dito copre
+    % la zona di contatto (azzerata dalla skin-mask) e il cambio bianco-su-bianco
+    % e' piccolo, quindi soglie piu' permissive.
+    whiteDiffThresh    = 30/255;   % abbassato da 50/255: premuta bianca = cambio luminanza piccolo
     blackDiffThresh    = 35/255;   % alzato da 25/255 per ridurre falsi positivi
-    whitePixelPercent  = 0.10;
+    whitePixelPercent  = 0.04;     % abbassato da 0.10: il dito copre parte della ROI analizzata
     blackPixelPercent  = 0.15;
 
     bwDiffWhite = imbinarize(diffImg / 255, whiteDiffThresh);
