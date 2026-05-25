@@ -272,10 +272,14 @@ while hasFrame(video_obj)
         plot(ax, fingertips_rect_px(:,1), fingertips_rect_px(:,2), 'r*', 'MarkerSize', 8, 'LineWidth', 2);
     end
     
-    % 2. Disegniamo i CANDIDATI SPAZIALI (Solo tocco, no pressione) in BLU TRATTEGGIATO
+    % 2. Disegniamo i CANDIDATI SPAZIALI (Solo tocco, no pressione) tratteggiati.
+    %    Bianchi in BLU, neri in GIALLO: sui tasti neri il blu si confondeva,
+    %    il giallo risalta e distingue subito quando un nero e' candidato.
     for id = 1:length(spatial_candidates)
         r = keyMap(spatial_candidates(id)).roi;
-        rectangle('Parent', ax, 'Position', r, 'EdgeColor', 'b', 'LineWidth', 2, 'LineStyle', '--');
+        candCol = 'b';
+        if strcmp(keyMap(spatial_candidates(id)).type, 'black'), candCol = 'y'; end
+        rectangle('Parent', ax, 'Position', r, 'EdgeColor', candCol, 'LineWidth', 2, 'LineStyle', '--');
     end
 
     % 3. Disegniamo I TASTI PREMUTI CONFERMATI (Intersezione Spazio + Tempo) CON RIEMPIMENTO
