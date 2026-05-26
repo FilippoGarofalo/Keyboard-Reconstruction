@@ -11,9 +11,9 @@ addpath(genpath(script_dir));
 %% 2. Parametri
 % Modifica questi valori per adattarli al tuo setup.
 % Imposta FORCE_RECALIBRATE = true per ricalibr forzando la sovrascrittura del .mat.
-FORCE_RECALIBRATE        = false;
-NUM_WHITE_KEYS           = 21;
-FIRST_VISIBLE_NOTE       = 'F';
+FORCE_RECALIBRATE        = true;
+NUM_WHITE_KEYS           = 12;
+FIRST_VISIBLE_NOTE       = 'C';
 WHITE_KEY_WIDTH_MM       = 23.5;
 VISIBLE_WHITE_HEIGHT_MM  = 150;
 PIXELS_PER_MM            = 4;
@@ -21,7 +21,7 @@ CALIB_TIME_SECONDS       = 2.0;
 MOTION_DIFF_THRESH       = 30;   % luminanza (0..255): soglia movimento mano vs sfondo statico (alza per meno falsi)
 MOTION_DILATE_PX         = 5;    % raggio dilatazione maschera movimento (riduci per meno sbordo sui tasti vicini)
 
-video_path      = fullfile(script_dir, '..', 'assets', 'Video2.mp4');
+video_path      = fullfile(script_dir, '..', 'assets', 'Video.mp4');
 calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration2.mat');
 
 if ~isfile(video_path)
@@ -263,7 +263,25 @@ while hasFrame(video_obj)
     % Il tasto è premuto SOLO SE Filippo vede il dito E tu vedi il movimento
     pressed_keys = intersect(temporal_candidates, spatial_candidates);
 
-    % --- E. VISUALIZZAZIONE ---
+    % --- E. BACKGROUND ADATTIVO ---
+    % Aggiorna lentamente il frame di riferimento verso il frame corrente
+    % per assorbire cambi di esposizione, messa a fuoco o riflessi della
+    % telecamera (senza di questo, una variazione globale di luminosita'
+    % farebbe comparire "macchie" nella frame-difference anche senza dita).
+    %
+    % Policy: aggiorna solo quando nessuna mano e' presente (spatial_candidates
+    % vuoto), cosi' le dita non "bruciano" il background e non diventano
+    % invisibili alla componente temporale.
+    %
+    % ALPHA_BG = 0.03 per frame → ~1 s per convergere a 30 fps
+    % (tau = 1/ALPHA_BG frame ≈ 33 frame ≈ 1.1 s a 30 fps).
+    ALPHA_BG = 0.03;
+    if isempty(spatial_candidates)
+        ref_rect = uint8((1 - ALPHA_BG) .* double(ref_rect) + ...
+                          ALPHA_BG       .* double(curr_rect));
+    end
+
+    % --- F. VISUALIZZAZIONE ---
     % Mostriamo il risultato finale sull'immagine rettificata
     imshow(curr_rect, 'Parent', ax); hold(ax, 'on');
     
@@ -293,7 +311,7 @@ while hasFrame(video_obj)
     end
     hold(ax, 'off');
 
-    % --- F. DEBUG: visualizzazione frame difference ---
+    % --- G. DEBUG: visualizzazione frame difference ---
     if DEBUG_DIFF
         % Pannello 1: frame rettificato con la skin mask tinta in rosso.
         % Cosi' vediamo se la mask copre davvero la mano dopo la rettifica.

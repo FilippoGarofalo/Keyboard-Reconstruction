@@ -48,33 +48,46 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     analysis_rows = floor(size(diffImg, 1) * TOP_FRACTION);
 
     pressedNotes = [];
-    perKeyRatio = zeros(1, length(keyMap));
+    perKeyRatio  = zeros(1, length(keyMap));
 
-    % 3. Controllo ROI per ogni tasto nella keyMap
+    % 3. Passo 1 — calcola il ratio grezzo per ogni tasto
     for i = 1:length(keyMap)
         bb = keyMap(i).BoundingBox; % [x y w h]
 
-        % Clip verticale: teniamo solo la parte del tasto che cade
-        % nel terzo superiore della tastiera rettificata.
         y0     = bb(2);
         h_clip = min(bb(4), max(0, analysis_rows - y0));
         if h_clip <= 0
-            perKeyRatio(i) = 0;
             continue;
         end
         bb_clipped = [bb(1), y0, bb(3), h_clip];
 
         if strcmp(keyMap(i).type, 'black')
             keyROI = imcrop(bwDiffBlack, bb_clipped);
-            pixelPercent = blackPixelPercent;
         else
             keyROI = imcrop(bwDiffWhite, bb_clipped);
-            pixelPercent = whitePixelPercent;
         end
+        perKeyRatio(i) = mean(keyROI(:));
+    end
 
-        ratio = mean(keyROI(:));
-        perKeyRatio(i) = ratio;
-        if ratio > pixelPercent
+    % 4. Passo 2 — soglia relativa al baseline del frame
+    % Ombre oblique e variazioni di esposizione alzano i ratio di TUTTI i
+    % tasti in modo uniforme (modo comune). Sottraendo la mediana per tipo
+    % si elimina questo offset globale e rimangono solo le anomalie locali,
+    % che corrispondono a tasti realmente premuti.
+    isWhite = strcmp({keyMap.type}, 'white');
+    isBlack = ~isWhite;
+    baseline_white = median(perKeyRatio(isWhite));
+    baseline_black = median(perKeyRatio(isBlack));
+
+    for i = 1:length(keyMap)
+        if strcmp(keyMap(i).type, 'black')
+            rel    = perKeyRatio(i) - baseline_black;
+            thresh = blackPixelPercent;
+        else
+            rel    = perKeyRatio(i) - baseline_white;
+            thresh = whitePixelPercent;
+        end
+        if rel > thresh
             pressedNotes = [pressedNotes, i];
         end
     end
