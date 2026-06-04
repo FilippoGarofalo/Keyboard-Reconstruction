@@ -21,10 +21,11 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
     % PHASE 1: SKIN SEGMENTATION & MASKING
     % =====================================================================
     img_YCbCr = rgb2ycbcr(img_RGB);
+    Y = img_YCbCr(:, :, 1);
     Cb = img_YCbCr(:, :, 2); 
     Cr = img_YCbCr(:, :, 3); 
     
-    raw_skin = (Cb >= 77 & Cb <= 127) & (Cr >= 133 & Cr <= 180);
+    raw_skin = (Y >= 100 & Y <= 235) & (Cb >= 85 & Cb <= 135) & (Cr >= 135 & Cr <= 180);
 
     % La mano si muove, i tasti no: intersechiamo la pelle con la maschera di
     % movimento (se fornita), eliminando i tasti color avorio fermi che
