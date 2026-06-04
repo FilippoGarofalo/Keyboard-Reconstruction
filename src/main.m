@@ -11,7 +11,7 @@ addpath(genpath(script_dir));
 %% 2. Parametri
 % Modifica questi valori per adattarli al tuo setup.
 % Imposta FORCE_RECALIBRATE = true per ricalibr forzando la sovrascrittura del .mat.
-FORCE_RECALIBRATE        = false;
+FORCE_RECALIBRATE        = true;
 NUM_WHITE_KEYS           = 21;
 FIRST_VISIBLE_NOTE       = 'F';
 WHITE_KEY_WIDTH_MM       = 23.5;
@@ -21,7 +21,7 @@ CALIB_TIME_SECONDS       = 2.0;
 MOTION_DIFF_THRESH       = 30;   % luminanza (0..255): soglia movimento mano vs sfondo statico (alza per meno falsi)
 MOTION_DILATE_PX         = 5;    % raggio dilatazione maschera movimento (riduci per meno sbordo sui tasti vicini)
 
-video_path      = fullfile(script_dir, '..', 'assets', 'Video2.mp4');
+video_path      = fullfile(script_dir, '..', 'assets', 'Video4.mp4');
 calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration2.mat');
 
 if ~isfile(video_path)
