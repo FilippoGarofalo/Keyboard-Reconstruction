@@ -1,5 +1,12 @@
-function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_rect, keyMap, skinMaskRect, analysisRowsOverride)
+function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_rect, keyMap, skinMaskRect, analysisRowsOverride, whiteDiffThresh, blackDiffThresh)
     % detectPressedKeys: Rileva i tasti premuti tramite differenza di frame.
+    %
+    % whiteDiffThresh / blackDiffThresh (opzionali): soglia di binarizzazione
+    % dei canali diff, scalare [0..1] oppure MAPPA HxW della stessa taglia
+    % dell'immagine rettificata. La mappa permette soglie diverse lungo la
+    % tastiera (illuminazione/ombre non uniformi) a costo per-frame invariato:
+    % il confronto elementwise costa quanto quello con scalare. Default:
+    % 20/255 (bianchi) e 25/255 (neri), uniformi come in origine.
     %
     % Differenza con SEGNO (non assoluta):
     %   - tasti BIANCHI: si cercano pixel che si sono SCURITI
@@ -45,13 +52,15 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     end
     diffForWhite = max(0, -grayDiff) / 255;   % [0..1]
 
-    whiteDiffThresh   = 20/255;
-    blackDiffThresh   = 25/255;
+    if nargin < 6 || isempty(whiteDiffThresh), whiteDiffThresh = 20/255; end
+    if nargin < 7 || isempty(blackDiffThresh), blackDiffThresh = 25/255; end
     whitePixelPercent = 0.10;
     blackPixelPercent = 0.15;
 
-    bwDiffWhite = imbinarize(diffForWhite, whiteDiffThresh);
-    bwDiffBlack = imbinarize(diffForBlack, blackDiffThresh);
+    % Il confronto elementwise vale sia per soglia scalare sia per mappa HxW
+    % (equivale a imbinarize nel caso scalare).
+    bwDiffWhite = diffForWhite > whiteDiffThresh;
+    bwDiffBlack = diffForBlack > blackDiffThresh;
 
     se = strel('disk', 2);
     bwDiffWhite = imopen(bwDiffWhite, se);

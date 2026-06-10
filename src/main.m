@@ -11,21 +11,34 @@ addpath(genpath(script_dir));
 %% 2. Parametri
 % Modifica questi valori per adattarli al tuo setup.
 % Imposta FORCE_RECALIBRATE = true per ricalibr forzando la sovrascrittura del .mat.
+VIDEO_NAME               = 'Video5.mp4';  % nome del video in assets/ da analizzare
 FORCE_RECALIBRATE        = true;
 NUM_WHITE_KEYS           = 21;
 FIRST_VISIBLE_NOTE       = 'F';
 WHITE_KEY_WIDTH_MM       = 23.5;
 VISIBLE_WHITE_HEIGHT_MM  = 150;
 PIXELS_PER_MM            = 4;
-CALIB_TIME_SECONDS       = 2.0;
+CALIB_TIME_SECONDS       = 0.0;
 MOTION_DIFF_THRESH       = 40;   % luminanza (0..255): soglia movimento mano vs sfondo statico (alza per meno falsi)
 MOTION_DILATE_PX         = 5;     % raggio dilatazione maschera movimento (riduci per meno sbordo sui tasti vicini)
 ANALYSIS_MARGIN_PX       = 10;   % margine di sicurezza (px) sopra il bordo superiore della mano
 MIN_ANALYSIS_FRAC        = 0.15; % floor adattivo: mai meno del 15% della tastiera (evita zone troppo piccole)
-GRID_SHIFT_X_PX          = -35;  % shift orizz. ROI temporale (px, neg=sinistra per inseguire ombra a sx del tasto nero)
+GRID_SHIFT_X_PX          = 0;  % shift orizz. ROI temporale (px, neg=sinistra per inseguire ombra a sx del tasto nero)
 GRID_SHIFT_Y_PX          = 0;   % shift vert. ROI temporale (px, neg=alto)
+FINGERTIP_MAX_ANGLE_DEG  = 180;  % k-curvature: angolo max (gradi) perche' un vertice dell'hull conti come punta (alza se perde punte vere, abbassa se restano punti sui lati del dito)
 
-video_path      = fullfile(script_dir, '..', 'assets', 'Video5.mp4');
+% Profilo soglia frame-difference lungo la tastiera: gain moltiplicativi
+% interpolati (pchip) sui punti di controllo, da tarare con DEBUG_DIFF.
+% Gain > 1 dove le ombre creano falsi positivi, < 1 dove le pressioni
+% sfuggono. Tutti 1.0 = soglia uniforme (comportamento originale).
+% Servono almeno 2 punti di controllo.
+THRESH_PROFILE_X         = [0.0  0.5  1.0];   % posizione (frazione larghezza tastiera, 0=sx 1=dx)
+WHITE_THRESH_GAIN        = [1.0  1.0  1.0];   % gain canale bianchi per ciascun punto
+BLACK_THRESH_GAIN        = [1.0  1.0  1.0];   % gain canale neri per ciascun punto
+WHITE_DIFF_THRESH        = 20/255;            % soglia base scurimento tasti bianchi
+BLACK_DIFF_THRESH        = 25/255;            % soglia base schiarimento tasti neri
+
+video_path      = fullfile(script_dir, '..', 'assets', VIDEO_NAME);
 calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration2.mat');
 
 if ~isfile(video_path)
@@ -125,12 +138,26 @@ else, roi_poly = calib.cornersPx; end
 roi_mask = build_keyboard_roi_mask(img_size, roi_poly);
 mask_3D = repmat(uint8(roi_mask), 1, 1, 3);
 
+% Mappe di soglia per-pixel per detectPressedKeys, precalcolate UNA volta:
+% i tasti non si muovono nell'immagine rettificata, quindi il profilo di
+% gain lungo X si paga solo qui; nel loop il confronto elementwise costa
+% quanto la soglia scalare.
+rectH = size(ref_rect, 1);
+rectW = size(ref_rect, 2);
+gain_x_white = interp1(THRESH_PROFILE_X, WHITE_THRESH_GAIN, linspace(0, 1, rectW), 'pchip');
+gain_x_black = interp1(THRESH_PROFILE_X, BLACK_THRESH_GAIN, linspace(0, 1, rectW), 'pchip');
+white_thresh_map = WHITE_DIFF_THRESH * repmat(gain_x_white, rectH, 1);
+black_thresh_map = BLACK_DIFF_THRESH * repmat(gain_x_black, rectH, 1);
+
 %% 5. Loop di Analisi Video
 fig = figure('Name', 'Keyboard Reconstruction - Analisi Integrata', 'WindowStyle', 'normal');
 ax = axes('Parent', fig);
 
 % Finestra di debug: diff grayscale + maschere binarie per-tipo
 DEBUG_DIFF = true;
+
+% Overlay candidati spaziali (rettangoli tratteggiati: blu=bianchi, giallo=neri)
+SHOW_SPATIAL_CANDIDATES = false;
 if DEBUG_DIFF
     % Calcoliamo la dimensione del frame rettificato per inizializzare gli
     % assi con la dimensione corretta (altrimenti rimangono 1x1 e si vede
@@ -208,7 +235,7 @@ while hasFrame(video_obj)
     motion_mask = imclose(motion_mask, strel('disk', 5));
     motion_mask = imdilate(motion_mask, strel('disk', MOTION_DILATE_PX));
 
-    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D, motion_mask);
+    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D, motion_mask, FINGERTIP_MAX_ANGLE_DEG);
     
     spatial_candidates = [];
     fingertips_rect_px = [];
@@ -347,9 +374,9 @@ while hasFrame(video_obj)
     end
 
     if DEBUG_DIFF
-        [temporal_candidates, diffDebug] = detectPressedKeys(curr_rect, ref_rect, keyMapTemporal, skin_mask_rect, adaptive_rows);
+        [temporal_candidates, diffDebug] = detectPressedKeys(curr_rect, ref_rect, keyMapTemporal, skin_mask_rect, adaptive_rows, white_thresh_map, black_thresh_map);
     else
-        temporal_candidates = detectPressedKeys(curr_rect, ref_rect, keyMapTemporal, skin_mask_rect, adaptive_rows);
+        temporal_candidates = detectPressedKeys(curr_rect, ref_rect, keyMapTemporal, skin_mask_rect, adaptive_rows, white_thresh_map, black_thresh_map);
     end
     
     % --- D. INTERSEZIONE (La vera magia) ---
@@ -368,11 +395,13 @@ while hasFrame(video_obj)
     % 2. Disegniamo i CANDIDATI SPAZIALI (Solo tocco, no pressione) tratteggiati.
     %    Bianchi in BLU, neri in GIALLO: sui tasti neri il blu si confondeva,
     %    il giallo risalta e distingue subito quando un nero e' candidato.
-    for id = 1:length(spatial_candidates)
-        r = keyMap(spatial_candidates(id)).roi;
-        candCol = 'b';
-        if strcmp(keyMap(spatial_candidates(id)).type, 'black'), candCol = 'y'; end
-        rectangle('Parent', ax, 'Position', r, 'EdgeColor', candCol, 'LineWidth', 2, 'LineStyle', '--');
+    if SHOW_SPATIAL_CANDIDATES
+        for id = 1:length(spatial_candidates)
+            r = keyMap(spatial_candidates(id)).roi;
+            candCol = 'b';
+            if strcmp(keyMap(spatial_candidates(id)).type, 'black'), candCol = 'y'; end
+            rectangle('Parent', ax, 'Position', r, 'EdgeColor', candCol, 'LineWidth', 2, 'LineStyle', '--');
+        end
     end
 
     % 3. Disegniamo I TASTI PREMUTI CONFERMATI (Intersezione Spazio + Tempo) CON RIEMPIMENTO
