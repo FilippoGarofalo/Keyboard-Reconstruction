@@ -1,4 +1,4 @@
-function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
+function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask, tipMaxAngleDeg)
     % GETFINGERS Detects convex fingertip coordinates from a single frame.
     %
     % Inputs:
@@ -7,11 +7,21 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
     %                 provided, the skin mask is ANDed with it so that static
     %                 skin-colored regions (e.g. ivory keys) cannot be mistaken
     %                 for hands. Hands move; keys do not.
+    %   tipMaxAngleDeg - (Optional, default 65) k-curvature: angolo massimo
+    %                 (gradi) al vertice dell'hull perche' conti come punta.
+    %                 Una vera punta gira bruscamente (~30-60 gradi); i vertici
+    %                 lungo il lato del dito sono quasi collineari (~180) e
+    %                 vengono scartati. Alza la soglia se perde punte vere,
+    %                 abbassala se restano punti spuri sui lati.
     %
     % Outputs:
     %   fingertips - An N x 2 matrix of [x, y] coordinates representing
     %                the detected fingertips (the "red points").
     %   skin_mask  - Logical H x W mask of skin pixels (post morphology).
+
+    if nargin < 3 || isempty(tipMaxAngleDeg)
+        tipMaxAngleDeg = 65;
+    end
 
     % Initialize the outputs
     fingertips = [];
@@ -134,20 +144,27 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
         % 3. Extract Convex Fingertips (Top Half of Hand)
         raw_tip_x = [];
         raw_tip_y_img = [];
-        robust_mid_y = median(y); 
-        
+        robust_mid_y = median(y);
+
         for j = 1:length(hull_y)
-            if hull_y(j) > robust_mid_y
-                raw_tip_x(end+1) = hull_x(j);
-                raw_tip_y_img(end+1) = -hull_y(j); 
+            if hull_y(j) <= robust_mid_y
+                continue;
             end
+            % Filtro k-curvature: con un dito solo esteso l'hull ha vertici
+            % anche lungo i lati del dito e sulle nocche; li' il contorno e'
+            % quasi rettilineo, mentre sulla punta vera gira bruscamente.
+            if hull_vertex_angle(hull_x, hull_y, j) > tipMaxAngleDeg
+                continue;
+            end
+            raw_tip_x(end+1) = hull_x(j);
+            raw_tip_y_img(end+1) = -hull_y(j);
         end
         
-        % 4. Density Clustering (Merge points closer than 20px)
+        % 4. Density Clustering (Merge points closer than min_dist)
         % Skip points too close to the frame boundary: they are hull
         % artifacts caused by a hand truncated at the image edge, not
         % real fingertips.
-        min_dist      = 20;
+        min_dist      = 35; % ~larghezza di un dito: candidati sulla stessa punta si fondono
         boundary_margin = 20; % px from any frame edge
         img_w = size(img_RGB, 2);
         img_h = size(img_RGB, 1);
@@ -165,6 +182,11 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
                 dist = sqrt((tx - fingertips(m, 1))^2 + (ty - fingertips(m, 2))^2);
                 if dist < min_dist
                     is_new = false;
+                    % Tra i candidati fusi teniamo il piu' avanzato verso la
+                    % punta (y immagine minore), non il primo trovato.
+                    if ty < fingertips(m, 2)
+                        fingertips(m, :) = [tx, ty];
+                    end
                     break;
                 end
             end
@@ -174,4 +196,41 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
             end
         end
     end
+end
+
+function ang = hull_vertex_angle(hx, hy, j)
+    % Angolo (gradi) al vertice j dell'hull, tra i due vicini sull'hull presi
+    % ad almeno NEIGH_DIST px dal vertice: vertici quasi coincidenti darebbero
+    % direzioni rumorose e angoli inaffidabili.
+    NEIGH_DIST = 15; % px
+    n = numel(hx);
+    px = hx(j); py = hy(j);
+
+    prev = j;
+    for s = 1:n-1
+        cand = mod(j - 1 - s, n) + 1;
+        if hypot(hx(cand) - px, hy(cand) - py) >= NEIGH_DIST
+            prev = cand;
+            break;
+        end
+    end
+    nxt = j;
+    for s = 1:n-1
+        cand = mod(j - 1 + s, n) + 1;
+        if hypot(hx(cand) - px, hy(cand) - py) >= NEIGH_DIST
+            nxt = cand;
+            break;
+        end
+    end
+
+    if prev == j || nxt == j
+        % Blob troppo piccolo per misurare la curvatura: nessuna punta affidabile.
+        ang = 180;
+        return;
+    end
+
+    v1 = [hx(prev) - px, hy(prev) - py];
+    v2 = [hx(nxt) - px, hy(nxt) - py];
+    c  = dot(v1, v2) / (norm(v1) * norm(v2));
+    ang = acosd(max(-1, min(1, c)));
 end
