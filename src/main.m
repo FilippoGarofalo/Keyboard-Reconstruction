@@ -11,10 +11,10 @@ addpath(genpath(script_dir));
 %% 2. Parametri
 % Modifica questi valori per adattarli al tuo setup.
 % Imposta FORCE_RECALIBRATE = true per ricalibr forzando la sovrascrittura del .mat.
-VIDEO_NAME               = 'Video1.mp4';  % nome del video in assets/ da analizzare
-FORCE_RECALIBRATE        = false;
-NUM_WHITE_KEYS           = 21;
-FIRST_VISIBLE_NOTE       = 'F';
+VIDEO_NAME               = 'Video3.mp4';  % nome del video in assets/ da analizzare
+FORCE_RECALIBRATE        = true;
+NUM_WHITE_KEYS           = 14;
+FIRST_VISIBLE_NOTE       = 'C';
 WHITE_KEY_WIDTH_MM       = 23.5;
 VISIBLE_WHITE_HEIGHT_MM  = 150;
 PIXELS_PER_MM            = 4;
@@ -29,6 +29,7 @@ FINGERTIP_MAX_ANGLE_DEG  = 180;  % k-curvature: angolo max (gradi) perche' un ve
 FINGERTIP_NEIGHBOR_RADIUS = 0;   % tolleranza candidati: per ogni punta, oltre al tasto colpito si considerano anche i N tasti vicini per adiacenza orizzontale (qualsiasi tipo, bianco/nero). 0 = comportamento originale (solo il tasto colpito)
 PRESSED_FILL_DARK_THRESH   = 60;   % visualizzazione: tasto BIANCO premuto, dal riempimento verde si escludono i pixel piu' SCURI di questo valore (0..255): cosi' il verde non sborda su tasti neri/fessure/ombre dentro la bounding box
 PRESSED_FILL_BRIGHT_THRESH = 150;  % visualizzazione: tasto NERO premuto, dal riempimento rosso si escludono i pixel piu' CHIARI di questo valore (0..255): cosi' il rosso resta sulla superficie nera e non sui bianchi adiacenti
+EXPAND_CANDIDATES_PER_HAND = false;  % se true riempie di candidati TUTTO lo span orizzontale di ogni mano (anche tasti non toccati): comodo se non tutte le dita generano una punta, ma crea falsi (es. bianco adiacente a un nero premuto che scatta per l'ombra). false = candidati solo i tasti realmente sotto una punta
 
 % Profilo soglia frame-difference lungo la tastiera: gain moltiplicativi
 % interpolati (pchip) sui punti di controllo, da tarare con DEBUG_DIFF.
@@ -39,7 +40,7 @@ THRESH_PROFILE_X         = [0.0  0.5  1.0];   % posizione (frazione larghezza ta
 WHITE_THRESH_GAIN        = [1.0  1.0  1.0];   % gain canale bianchi per ciascun punto
 BLACK_THRESH_GAIN        = [1.0  1.0  1.0];   % gain canale neri per ciascun punto
 WHITE_DIFF_THRESH        = 30/255;            % soglia base scurimento tasti bianchi (alzata da 20: meno trigger)
-BLACK_DIFF_THRESH        = 35/255;            % soglia base schiarimento/scurimento tasti neri (alzata da 25: meno trigger)
+BLACK_DIFF_THRESH        = 30/255;            % soglia base schiarimento/scurimento tasti neri (abbassata da 35: i neri scattano piu' facilmente)
 
 video_path      = fullfile(script_dir, '..', 'assets', VIDEO_NAME);
 calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration2.mat');
@@ -341,7 +342,7 @@ while hasFrame(video_obj)
     % orizzontale > HAND_GAP_THRESH indica il vuoto tra le due mani.
     % Ogni gruppo viene espanso separatamente, cosi' non si includono i
     % tasti nel mezzo tra mano sinistra e mano destra.
-    if length(spatial_candidates) >= 2
+    if EXPAND_CANDIDATES_PER_HAND && length(spatial_candidates) >= 2
         key_width_px   = WHITE_KEY_WIDTH_MM * PIXELS_PER_MM;
         HAND_GAP_THRESH = 3 * key_width_px;   % >3 tasti bianchi = cambio di mano
 
