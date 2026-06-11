@@ -8,22 +8,29 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     % il confronto elementwise costa quanto quello con scalare. Default:
     % 20/255 (bianchi) e 25/255 (neri), uniformi come in origine.
     %
-    % Differenza con SEGNO (non assoluta):
-    %   - tasti BIANCHI: si cercano pixel che si sono SCURITI
+    % Differenza per canale:
+    %   - tasti BIANCHI: differenza con SEGNO, solo pixel SCURITI
     %     (il dito, piu' scuro del tasto bianco, lo copre → current < background
-    %      → segnale = background - current > 0)
-    %   - tasti NERI: si cercano pixel che si sono SCHIARITI
-    %     (il dito/pelle, piu' chiaro del tasto nero, lo copre → current > background
-    %      → segnale = current - background > 0)
+    %      → segnale = background - current > 0). Il segno evita che lo
+    %      scurimento dei bordi di un nero premuto sporchi i bianchi adiacenti.
+    %   - tasti NERI: differenza ASSOLUTA, schiarimento OR scurimento
+    %     (|current - background|). Premendo un nero il segnale dominante non
+    %      e' solo la pelle che lo SCHIARISCE (area piccola e stretta) ma anche
+    %      l'OMBRA che lo SCURISCE (il tasto si abbassa, il dito proietta ombra,
+    %      i bordi col bianco si scuriscono): col solo schiarimento si perdeva,
+    %      ed e' il motivo per cui il canale bianco "vedeva" i neri meglio del
+    %      canale nero. Combinando i due versi il nero si traccia molto meglio.
     %
-    % Questo elimina il cross-talk ai bordi: quando un bianco viene premuto,
-    % i pixel dell'area adiacente si scuriscono (direzione "bianco") e NON
-    % contribuiscono al canale "nero", eliminando i falsi positivi sui neri.
+    % Trade-off: l'abs riapre il rischio di cross-talk (lo scurimento di un
+    % bianco premuto sui bordi di un nero adiacente). Lo arginiamo su due
+    % fronti: (1) l'intersezione spaziale a valle (un nero si conferma solo se
+    % una punta di dito gli sta sopra) e (2) blackPixelPercent piu' alto, cosi'
+    % una sottile striscia di bleed sul bordo non basta a far scattare il nero.
     %
     % La skin mask viene applicata SOLO a diffForWhite: per i neri il segnale
-    % di pressione E' la pelle che schiarisce il tasto, azzerarla toglierebbe
-    % il segnale utile. Per i bianchi serve invece a evitare che il movimento
-    % della mano generi falsi scurimenti su bianchi adiacenti.
+    % di pressione E' (anche) la pelle che schiarisce il tasto, azzerarla
+    % toglierebbe segnale utile. Per i bianchi serve invece a evitare che il
+    % movimento della mano generi falsi scurimenti su bianchi adiacenti.
     %
     % Ogni ROI viene ristretta di ROI_MARGIN px verso l'interno (opzione A)
     % per ridurre il bleed dai bordi dei tasti adiacenti.
@@ -41,9 +48,11 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     % 1. Differenza con segno (NON abs)
     grayDiff = double(im2gray(current_rect)) - double(im2gray(background_rect));
 
-    % 2. Canale NERO: pelle su tasto nero → area si SCHIARISCE (current > background)
-    %    La skin mask NON viene applicata: il segnale utile E' la pelle stessa.
-    diffForBlack = max(0,  grayDiff) / 255;   % [0..1]
+    % 2. Canale NERO: combinato schiarimento+scurimento = |current - background|.
+    %    Cattura sia la pelle che schiarisce sia l'ombra che scurisce (vedi
+    %    header). Calcolato sul grayDiff RAW, PRIMA che la skin mask lo azzeri
+    %    sotto (per i neri la pelle e' segnale, non rumore).
+    diffForBlack = abs(grayDiff) / 255;   % [0..1]
 
     % 3. Canale BIANCO: pelle su tasto bianco → area si SCURISCE (current < background)
     %    La skin mask viene applicata per evitare falsi positivi da movimento mano.
@@ -55,7 +64,11 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     if nargin < 6 || isempty(whiteDiffThresh), whiteDiffThresh = 20/255; end
     if nargin < 7 || isempty(blackDiffThresh), blackDiffThresh = 25/255; end
     whitePixelPercent = 0.10;
-    blackPixelPercent = 0.15;
+    % Guardia anti-cross-talk: col canale nero ora in abs entra piu' segnale
+    % (anche lo scurimento), quindi alziamo la frazione d'area richiesta da
+    % 0.15 a 0.20. Una striscia sottile di bleed dal bordo di un bianco premuto
+    % non raggiunge il 20% della ROI nera; una pressione vera (pelle + ombra) si'.
+    blackPixelPercent = 0.20;
 
     % Il confronto elementwise vale sia per soglia scalare sia per mappa HxW
     % (equivale a imbinarize nel caso scalare).
