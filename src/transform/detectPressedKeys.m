@@ -14,23 +14,27 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     %      → segnale = background - current > 0). Il segno evita che lo
     %      scurimento dei bordi di un nero premuto sporchi i bianchi adiacenti.
     %   - tasti NERI: differenza ASSOLUTA, schiarimento OR scurimento
-    %     (|current - background|). Premendo un nero il segnale dominante non
-    %      e' solo la pelle che lo SCHIARISCE (area piccola e stretta) ma anche
-    %      l'OMBRA che lo SCURISCE (il tasto si abbassa, il dito proietta ombra,
-    %      i bordi col bianco si scuriscono): col solo schiarimento si perdeva,
-    %      ed e' il motivo per cui il canale bianco "vedeva" i neri meglio del
-    %      canale nero. Combinando i due versi il nero si traccia molto meglio.
+    %     (|current - background|), ma con la PELLE ESCLUSA. Il dito che copre
+    %      il tasto non e' di per se' una pressione (potrebbe solo sfiorarlo),
+    %      quindi la pelle non deve contare; il segnale che resta e' l'OMBRA di
+    %      contatto e i bordi col bianco che si scuriscono (il tasto si abbassa,
+    %      il dito proietta ombra), piu' specifici di una pressione reale.
+    %
+    % Normalizzazione (BIANCHI e NERI): il rapporto non e' calcolato sull'area
+    % totale della ROI ma sulla sola area ESPOSTA (non-pelle) dentro la fascia di
+    % analisi: ratio = (pixel cambiati non-pelle) / (pixel esposti). Cosi'
+    % escludere la pelle non diluisce il rapporto su nessuno dei due tipi.
+    % Guardia anti-rumore: se l'area esposta e' sotto MIN_EXPOSED_PX non si decide.
     %
     % Trade-off: l'abs riapre il rischio di cross-talk (lo scurimento di un
     % bianco premuto sui bordi di un nero adiacente). Lo arginiamo su due
     % fronti: (1) l'intersezione spaziale a valle (un nero si conferma solo se
-    % una punta di dito gli sta sopra) e (2) blackPixelPercent piu' alto, cosi'
+    % una punta di dito gli sta sopra) e (2) blackPixelPercent, cosi'
     % una sottile striscia di bleed sul bordo non basta a far scattare il nero.
     %
-    % La skin mask viene applicata SOLO a diffForWhite: per i neri il segnale
-    % di pressione E' (anche) la pelle che schiarisce il tasto, azzerarla
-    % toglierebbe segnale utile. Per i bianchi serve invece a evitare che il
-    % movimento della mano generi falsi scurimenti su bianchi adiacenti.
+    % La skin mask viene applicata a ENTRAMBI i canali: ai bianchi per evitare
+    % falsi scurimenti dal movimento della mano, ai neri per misurare solo
+    % l'area di tasto visibile (vedi sopra).
     %
     % Ogni ROI viene ristretta di ROI_MARGIN px verso l'interno (opzione A)
     % per ridurre il bleed dai bordi dei tasti adiacenti.
@@ -44,30 +48,37 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     %                  e .perKeyRatio (vettore con la % di pixel "on" per tasto)
 
     ROI_MARGIN = 2;   % pixel di margine interno per ogni lato della ROI (opzione A)
+    MIN_EXPOSED_PX = 30;  % area esposta (non-pelle) minima di un tasto nella fascia
+                          % per decidere: sotto questa il rapporto e' troppo
+                          % rumoroso (pochi pixel) → ratio 0. Vale per bianchi e neri.
 
     % 1. Differenza con segno (NON abs)
     grayDiff = double(im2gray(current_rect)) - double(im2gray(background_rect));
 
+    % Maschera di pelle (logica), riusata su entrambi i canali. Se non fornita,
+    % maschera vuota (nessun pixel di pelle).
+    if nargin >= 4 && ~isempty(skinMaskRect)
+        skinMask = logical(skinMaskRect);
+    else
+        skinMask = false(size(grayDiff));
+    end
+
     % 2. Canale NERO: combinato schiarimento+scurimento = |current - background|.
-    %    Cattura sia la pelle che schiarisce sia l'ombra che scurisce (vedi
-    %    header). Calcolato sul grayDiff RAW, PRIMA che la skin mask lo azzeri
-    %    sotto (per i neri la pelle e' segnale, non rumore).
+    %    La PELLE verra' esclusa (sotto, dopo l'imopen): il dito che copre il
+    %    tasto non e' di per se' una pressione, conta solo l'ombra di contatto.
     diffForBlack = abs(grayDiff) / 255;   % [0..1]
 
     % 3. Canale BIANCO: pelle su tasto bianco → area si SCURISCE (current < background)
     %    La skin mask viene applicata per evitare falsi positivi da movimento mano.
-    if nargin >= 4 && ~isempty(skinMaskRect)
-        grayDiff(logical(skinMaskRect)) = 0;
-    end
+    grayDiff(skinMask) = 0;
     diffForWhite = max(0, -grayDiff) / 255;   % [0..1]
 
     if nargin < 6 || isempty(whiteDiffThresh), whiteDiffThresh = 20/255; end
     if nargin < 7 || isempty(blackDiffThresh), blackDiffThresh = 25/255; end
     whitePixelPercent = 0.10;
-    % Guardia anti-cross-talk: col canale nero ora in abs entra piu' segnale
-    % (anche lo scurimento), quindi alziamo la frazione d'area richiesta da
-    % 0.15 a 0.20. Una striscia sottile di bleed dal bordo di un bianco premuto
-    % non raggiunge il 20% della ROI nera; una pressione vera (pelle + ombra) si'.
+    % Guardia anti-cross-talk: col canale nero in abs entra piu' segnale
+    % (anche lo scurimento) Una striscia sottile di bleed dal bordo di un bianco premuto
+    % non raggiunge il 20% della ROI nera; una pressione vera si'.
     blackPixelPercent = 0.20;
 
     % Il confronto elementwise vale sia per soglia scalare sia per mappa HxW
@@ -78,6 +89,13 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
     se = strel('disk', 2);
     bwDiffWhite = imopen(bwDiffWhite, se);
     bwDiffBlack = imopen(bwDiffBlack, se);
+
+    % ENTRAMBI i canali senza pelle: il dito che copre il tasto non deve contare
+    % come cambiamento. Resta l'ombra di contatto e i bordi scuriti, piu' specifici
+    % di una pressione. La normalizzazione per-tasto (sotto) usa solo l'area esposta,
+    % cosi' la pelle non diluisce il rapporto (vale per bianchi e neri).
+    bwDiffWhite(skinMask) = false;
+    bwDiffBlack(skinMask) = false;
 
     % 4. Limite verticale di analisi
     TOP_FRACTION  = 1/3;
@@ -103,22 +121,35 @@ function [pressedNotes, debugInfo] = detectPressedKeys(current_rect, background_
         end
         bb_clipped = [bb(1), y0, bb(3), h_clip];
 
-        % Margine interno (opzione A)
+        % Margine interno
         x_in   = bb_clipped(1) + ROI_MARGIN;
         y_in   = bb_clipped(2) + ROI_MARGIN;
         w_in   = max(1, bb_clipped(3) - 2*ROI_MARGIN);
         h_in   = max(1, bb_clipped(4) - 2*ROI_MARGIN);
         bb_inner = [x_in, y_in, w_in, h_in];
 
+        % Selezione canale e soglia per tipo di tasto.
         if strcmp(keyMap(i).type, 'black')
-            keyROI = imcrop(bwDiffBlack, bb_inner);
+            bwMap        = bwDiffBlack;
             pixelPercent = blackPixelPercent;
         else
-            keyROI = imcrop(bwDiffWhite, bb_inner);
+            bwMap        = bwDiffWhite;
             pixelPercent = whitePixelPercent;
         end
 
-        ratio = mean(keyROI(:));
+        % Normalizzazione sull'area ESPOSTA (non-pelle) della fascia, per
+        % ENTRAMBI i tipi. Numeratore = pixel cambiati (gia' senza pelle),
+        % denominatore = pixel esposti. Cosi' la pelle non diluisce il rapporto:
+        % misuriamo "di quel tasto visibile nella fascia, quanto e' cambiato".
+        changedROI = imcrop(bwMap,     bb_inner);   % gia' senza pelle
+        exposed    = ~imcrop(skinMask, bb_inner);   % area visibile del tasto
+        nExposed   = nnz(exposed);
+        if nExposed >= MIN_EXPOSED_PX
+            ratio = nnz(changedROI) / nExposed;
+        else
+            ratio = 0;   % troppo pochi pixel esposti nella fascia: non decidere
+        end
+
         perKeyRatio(i) = ratio;
         if ratio > pixelPercent
             pressedNotes = [pressedNotes, i];

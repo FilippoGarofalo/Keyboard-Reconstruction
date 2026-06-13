@@ -10,8 +10,8 @@ addpath(genpath(script_dir));
 
 %% 2. Parameters
 
-VIDEO_NAME               = 'Video3.mp4';  
-FORCE_RECALIBRATE        = true;
+VIDEO_NAME               = 'Video4.mp4';  
+FORCE_RECALIBRATE        = false;
 
 % Keyboard model parameters
 NUM_WHITE_KEYS           = 14;
@@ -29,7 +29,7 @@ PRESSED_FILL_BRIGHT_THRESH = 150;  % visualizzazione: tasto NERO premuto, dal ri
 
 % Soglia base frame-difference (scalare 0..1) per la binarizzazione dei canali.
 WHITE_DIFF_THRESH        = 30/255;            % soglia base scurimento tasti bianchi (alzata da 20: meno trigger)
-BLACK_DIFF_THRESH        = 30/255;            % soglia base schiarimento/scurimento tasti neri (abbassata da 35: i neri scattano piu' facilmente)
+BLACK_DIFF_THRESH        = 20/255;            % soglia base schiarimento/scurimento tasti neri (abbassata da 35: i neri scattano piu' facilmente)
 
 video_path      = fullfile(script_dir, '..', 'assets', VIDEO_NAME);
 calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration2.mat');
@@ -83,37 +83,9 @@ planeSizeMm = [vk.keyboardHeightMm, vk.keyboardWidthMm];
 ref_rect = warp_image_inverse(first_frame, H, planeSizeMm, pixelsPerMm);
 
 % Costruiamo keyMap direttamente da virtualKeyboard (bianchi + neri, gia'
-% modellati in coordinate rettificate dalla calibrazione).
-% Compat: i .mat vecchi non hanno il campo unificato allKeys.
-if isfield(vk, 'allKeys') && ~isempty(vk.allKeys)
-    allKeys = vk.allKeys;
-else
-    whiteKeys = vk.keys;
-    for i = 1:numel(whiteKeys), whiteKeys(i).type = 'white'; end
-
-    % Se vk.blackKeys non c'e' (calibrazioni vecchie con solo bianchi),
-    % costruiamo i neri al volo dal modello dei bianchi e dal startNote
-    % salvato in calibration. Cosi' main.m funziona senza rigenerare il .mat.
-    if isfield(vk, 'blackKeys') && ~isempty(vk.blackKeys)
-        blackKeys = vk.blackKeys;
-    else
-        if isfield(calib, 'firstVisibleNote') && ~isempty(calib.firstVisibleNote)
-            startNote = calib.firstVisibleNote;
-        else
-            startNote = 'A0';  % default 88-tasti
-        end
-        blackKeys = build_virtual_black_keys(vk, startNote);
-    end
-    for i = 1:numel(blackKeys), blackKeys(i).type = 'black'; end
-
-    % Allinea i campi per consentire la concatenazione
-    commonFields = intersect(fieldnames(whiteKeys), fieldnames(blackKeys));
-    extraW = setdiff(fieldnames(whiteKeys), commonFields);
-    extraB = setdiff(fieldnames(blackKeys), commonFields);
-    for f = 1:numel(extraW), [blackKeys.(extraW{f})] = deal([]); end
-    for f = 1:numel(extraB), [whiteKeys.(extraB{f})] = deal([]); end
-    allKeys = [whiteKeys(:); blackKeys(:)];
-end
+% modellati in coordinate rettificate dalla calibrazione). La calibrazione
+% produce sempre il campo unificato allKeys (vedi build_virtual_keyboard).
+allKeys = vk.allKeys;
 keyMap = struct('id', {}, 'roi', {}, 'type', {}, 'vertices', {}, 'BoundingBox', {});
 for k = 1:numel(allKeys)
     keyMap(k).id          = k;
@@ -138,7 +110,7 @@ ax = axes('Parent', fig);
 % Finestra di debug: diff grayscale + maschere binarie per-tipo.
 % Flag di sviluppo: tienilo false per la versione "pulita"; mettilo true per
 % riaprire la finestra a 4 pannelli e il log a console durante la taratura.
-DEBUG_DIFF = false;
+DEBUG_DIFF = true;
 
 % Overlay candidati spaziali (rettangoli tratteggiati: blu=bianchi, giallo=neri)
 SHOW_SPATIAL_CANDIDATES = false;
