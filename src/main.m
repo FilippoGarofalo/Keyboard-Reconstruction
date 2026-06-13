@@ -8,22 +8,83 @@ close all; clear; clc;
 script_dir = fileparts(mfilename('fullpath')); 
 addpath(genpath(script_dir)); 
 
-%% 2. Inizializzazione Video e Calibrazione (Flavio)
-video_path = fullfile(script_dir, '..', 'assets', 'Video.mp4'); 
+%% 2. Parametri
+% Modifica questi valori per adattarli al tuo setup.
+% Imposta FORCE_RECALIBRATE = true per ricalibr forzando la sovrascrittura del .mat.
+VIDEO_NAME               = 'Video3.mp4';  % nome del video in assets/ da analizzare
+FORCE_RECALIBRATE        = true;
+NUM_WHITE_KEYS           = 14;
+FIRST_VISIBLE_NOTE       = 'C';
+WHITE_KEY_WIDTH_MM       = 23.5;
+VISIBLE_WHITE_HEIGHT_MM  = 150;
+PIXELS_PER_MM            = 4;
+CALIB_TIME_SECONDS       = 0.0;
+MOTION_DIFF_THRESH       = 40;   % luminanza (0..255): soglia movimento mano vs sfondo statico (alza per meno falsi)
+MOTION_DILATE_PX         = 5;     % raggio dilatazione maschera movimento (riduci per meno sbordo sui tasti vicini)
+ANALYSIS_MARGIN_PX       = 10;   % margine di sicurezza (px) sopra il bordo superiore della mano
+MIN_ANALYSIS_FRAC        = 0.15; % floor adattivo: mai meno del 15% della tastiera (evita zone troppo piccole)
+GRID_SHIFT_X_PX          = 0;  % shift orizz. ROI temporale (px, neg=sinistra per inseguire ombra a sx del tasto nero)
+GRID_SHIFT_Y_PX          = 0;   % shift vert. ROI temporale (px, neg=alto)
+FINGERTIP_MAX_ANGLE_DEG  = 180;  % k-curvature: angolo max (gradi) perche' un vertice dell'hull conti come punta (alza se perde punte vere, abbassa se restano punti sui lati del dito)
+FINGERTIP_NEIGHBOR_RADIUS = 0;   % tolleranza candidati: per ogni punta, oltre al tasto colpito si considerano anche i N tasti vicini per adiacenza orizzontale (qualsiasi tipo, bianco/nero). 0 = comportamento originale (solo il tasto colpito)
+PRESSED_FILL_DARK_THRESH   = 60;   % visualizzazione: tasto BIANCO premuto, dal riempimento verde si escludono i pixel piu' SCURI di questo valore (0..255): cosi' il verde non sborda su tasti neri/fessure/ombre dentro la bounding box
+PRESSED_FILL_BRIGHT_THRESH = 150;  % visualizzazione: tasto NERO premuto, dal riempimento rosso si escludono i pixel piu' CHIARI di questo valore (0..255): cosi' il rosso resta sulla superficie nera e non sui bianchi adiacenti
+EXPAND_CANDIDATES_PER_HAND = false;  % se true riempie di candidati TUTTO lo span orizzontale di ogni mano (anche tasti non toccati): comodo se non tutte le dita generano una punta, ma crea falsi (es. bianco adiacente a un nero premuto che scatta per l'ombra). false = candidati solo i tasti realmente sotto una punta
+
+% Profilo soglia frame-difference lungo la tastiera: gain moltiplicativi
+% interpolati (pchip) sui punti di controllo, da tarare con DEBUG_DIFF.
+% Gain > 1 dove le ombre creano falsi positivi, < 1 dove le pressioni
+% sfuggono. Tutti 1.0 = soglia uniforme (comportamento originale).
+% Servono almeno 2 punti di controllo.
+THRESH_PROFILE_X         = [0.0  0.5  1.0];   % posizione (frazione larghezza tastiera, 0=sx 1=dx)
+WHITE_THRESH_GAIN        = [1.0  1.0  1.0];   % gain canale bianchi per ciascun punto
+BLACK_THRESH_GAIN        = [1.0  1.0  1.0];   % gain canale neri per ciascun punto
+WHITE_DIFF_THRESH        = 30/255;            % soglia base scurimento tasti bianchi (alzata da 20: meno trigger)
+BLACK_DIFF_THRESH        = 30/255;            % soglia base schiarimento/scurimento tasti neri (abbassata da 35: i neri scattano piu' facilmente)
+
+video_path      = fullfile(script_dir, '..', 'assets', VIDEO_NAME);
+calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration2.mat');
+
 if ~isfile(video_path)
-    error('File video non trovato! Controlla il percorso.');
+    error('File video non trovato: %s', video_path);
 end
+
+%% 3. Calibrazione
+if ~isfile(calib_file_path) || FORCE_RECALIBRATE
+    fprintf('Calibrazione: %d tasti bianchi, nota iniziale ''%s''...\n', ...
+        NUM_WHITE_KEYS, FIRST_VISIBLE_NOTE);
+    frame_path = fullfile(script_dir, '..', 'assets', 'frame0.png');
+    calib = calibrate_H_white_from_video(video_path, NUM_WHITE_KEYS, ...
+        'TimeSeconds',             CALIB_TIME_SECONDS, ...
+        'AutoSkipDarkFrames',      true, ...
+        'DarkFrameThreshold',      5, ...
+        'MaxAutoSkipFrames',       300, ...
+        'SaveFramePath',           frame_path, ...
+        'WhiteKeyWidthMm',         WHITE_KEY_WIDTH_MM, ...
+        'VisibleWhiteKeyHeightMm', VISIBLE_WHITE_HEIGHT_MM, ...
+        'PixelsPerMm',             PIXELS_PER_MM, ...
+        'FirstVisibleNote',        FIRST_VISIBLE_NOTE, ...
+        'OutputMatFile',           '');
+    calib.virtualKeyboard = build_virtual_keyboard(calib, 'StartNote', FIRST_VISIBLE_NOTE);
+    calibration = calib;
+    save(calib_file_path, 'calibration');
+    fprintf('Calibrazione completata e salvata: %s\n', calib_file_path);
+else
+    disp('Calibrazione esistente trovata, caricamento...');
+    tmp = load(calib_file_path);
+    calib = tmp.calibration;
+end
+
+H = calib.H_white;
 video_obj = VideoReader(video_path);
 
-disp('Caricamento modello della tastiera...');
-calib_file_path = fullfile(script_dir, 'keyboard model', 'H_white_calibration.mat');
-calib_data = load(calib_file_path);
-calib = calib_data.calibration; 
-H = calib.H_white; % Matrice di omografia di Flavio
-
-%% 3. Setup Immagine Rettificata e KeyMap (Flavio + Emanuele)
+%% 4. Setup Immagine Rettificata e KeyMap (Flavio + Emanuele)
 first_frame = readFrame(video_obj);
 video_obj.CurrentTime = 0; % Reset
+
+% Background statico in coordinate raw (video) per la maschera di movimento.
+% I tasti sono fermi qui dentro; solo la mano cambia rispetto a questo frame.
+background_gray = im2gray(first_frame);
 
 % Generiamo l'immagine rettificata di Flavio (vista dall'alto)
 % Usiamo i parametri della calibrazione invece di assumere 52 tasti
@@ -73,6 +134,16 @@ for k = 1:numel(allKeys)
     keyMap(k).vertices    = allKeys(k).polygonPx;
 end
 
+% Ordinamento dei tasti per centro X (statico: i tasti non si muovono nel
+% piano rettificato). Serve per la tolleranza dei candidati spaziali: i
+% "vicini geometrici" di un tasto sono quelli adiacenti in quest'ordine,
+% bianchi e neri mescolati (un bianco ha cosi' come vicino anche il nero
+% sovrastante e viceversa). keyRankX(id) = posizione del tasto in keyOrderX.
+key_centers_x = arrayfun(@(k) keyMap(k).BoundingBox(1) + keyMap(k).BoundingBox(3)/2, 1:numel(keyMap));
+[~, keyOrderX] = sort(key_centers_x);
+keyRankX = zeros(1, numel(keyMap));
+keyRankX(keyOrderX) = 1:numel(keyMap);
+
 % Pre-calcoliamo la maschera ROI di Flavio per pulire l'input di Filippo
 img_size = [size(first_frame, 1), size(first_frame, 2)];
 if isfield(calib, 'roiPolygonPx'), roi_poly = calib.roiPolygonPx;
@@ -81,12 +152,26 @@ else, roi_poly = calib.cornersPx; end
 roi_mask = build_keyboard_roi_mask(img_size, roi_poly);
 mask_3D = repmat(uint8(roi_mask), 1, 1, 3);
 
-%% 4. Loop di Analisi Video
+% Mappe di soglia per-pixel per detectPressedKeys, precalcolate UNA volta:
+% i tasti non si muovono nell'immagine rettificata, quindi il profilo di
+% gain lungo X si paga solo qui; nel loop il confronto elementwise costa
+% quanto la soglia scalare.
+rectH = size(ref_rect, 1);
+rectW = size(ref_rect, 2);
+gain_x_white = interp1(THRESH_PROFILE_X, WHITE_THRESH_GAIN, linspace(0, 1, rectW), 'pchip');
+gain_x_black = interp1(THRESH_PROFILE_X, BLACK_THRESH_GAIN, linspace(0, 1, rectW), 'pchip');
+white_thresh_map = WHITE_DIFF_THRESH * repmat(gain_x_white, rectH, 1);
+black_thresh_map = BLACK_DIFF_THRESH * repmat(gain_x_black, rectH, 1);
+
+%% 5. Loop di Analisi Video
 fig = figure('Name', 'Keyboard Reconstruction - Analisi Integrata', 'WindowStyle', 'normal');
 ax = axes('Parent', fig);
 
 % Finestra di debug: diff grayscale + maschere binarie per-tipo
 DEBUG_DIFF = true;
+
+% Overlay candidati spaziali (rettangoli tratteggiati: blu=bianchi, giallo=neri)
+SHOW_SPATIAL_CANDIDATES = false;
 if DEBUG_DIFF
     % Calcoliamo la dimensione del frame rettificato per inizializzare gli
     % assi con la dimensione corretta (altrimenti rimangono 1x1 e si vede
@@ -95,10 +180,12 @@ if DEBUG_DIFF
     recW = max(1, round(planeSizeMm(2) * pixelsPerMm));
 
     figDebug   = figure('Name', 'Debug: Frame Difference', 'WindowStyle', 'normal');
-    axSkin     = subplot(4, 1, 1, 'Parent', figDebug);
-    axDiff     = subplot(4, 1, 2, 'Parent', figDebug);
-    axBwWhite  = subplot(4, 1, 3, 'Parent', figDebug);
-    axBwBlack  = subplot(4, 1, 4, 'Parent', figDebug);
+    scr = get(0, 'ScreenSize');   % [1 1 screenW screenH]
+    figDebug.Position = [10, 80, scr(3) - 20, min(650, scr(4) - 150)];
+    axSkin     = subplot(1, 4, 1, 'Parent', figDebug);
+    axDiff     = subplot(1, 4, 2, 'Parent', figDebug);
+    axBwWhite  = subplot(1, 4, 3, 'Parent', figDebug);
+    axBwBlack  = subplot(1, 4, 4, 'Parent', figDebug);
 
     % Pannello 1: frame rettificato con skin mask in rosso semi-trasparente
     hSkinImg = imshow(zeros(recH, recW, 3, 'uint8'), 'Parent', axSkin);
@@ -117,6 +204,39 @@ if DEBUG_DIFF
 
     hBwBlack = imshow(false(recH, recW), 'Parent', axBwBlack);
     title(axBwBlack, 'BW Diff - soglia neri');
+
+    % Creiamo UNA SOLA linea ciano per pannello, aggiornata frame per frame.
+    % Usando l'handle e impostando .Value evitiamo l'accumulo di linee.
+    hold(axDiff,    'on'); hLineAnalysisDiff  = yline(axDiff,    1, 'c-', 'LineWidth', 1.5); hold(axDiff,    'off');
+    hold(axBwWhite, 'on'); hLineAnalysisWhite = yline(axBwWhite, 1, 'c-', 'LineWidth', 1.5); hold(axBwWhite, 'off');
+    hold(axBwBlack, 'on'); hLineAnalysisBlack = yline(axBwBlack, 1, 'c-', 'LineWidth', 1.5); hold(axBwBlack, 'off');
+
+    % Disegna i bounding box dei tasti UNA SOLA VOLTA su tutti i pannelli diff.
+    % Le posizioni sono fisse nel piano rettificato, quindi non serve ridisegnarle
+    % ad ogni frame: restano sopra all'immagine aggiornata via set(...,'CData',...).
+    % Bianchi in ciano, neri in giallo (stesso schema della finestra principale).
+    % Salviamo gli handle: ad ogni frame coloriamo OGNI box in base allo stato
+    % (ratio vs soglia), cosi' lo stato premuto/non-premuto si legge a colpo
+    % d'occhio anche sui neri, il cui segnale binario e' sottile e poco visibile.
+    hKeyBoxDiff  = gobjects(1, length(keyMap));
+    hKeyBoxWhite = gobjects(1, length(keyMap));
+    hKeyBoxBlack = gobjects(1, length(keyMap));
+    hold(axDiff,    'on');
+    hold(axBwWhite, 'on');
+    hold(axBwBlack, 'on');
+    for k = 1:length(keyMap)
+        bb  = keyMap(k).BoundingBox;
+        col = 'c'; lw = 0.8;
+        if strcmp(keyMap(k).type, 'black'), col = 'y'; lw = 1.0; end
+        xv = [bb(1), bb(1)+bb(3), bb(1)+bb(3), bb(1)];
+        yv = [bb(2), bb(2),       bb(2)+bb(4), bb(2)+bb(4)];
+        hKeyBoxDiff(k)  = patch('Parent', axDiff,    'XData', xv, 'YData', yv, 'FaceColor', 'none', 'EdgeColor', col, 'LineWidth', lw, 'EdgeAlpha', 0.35);
+        hKeyBoxWhite(k) = patch('Parent', axBwWhite, 'XData', xv, 'YData', yv, 'FaceColor', 'none', 'EdgeColor', col, 'LineWidth', lw, 'EdgeAlpha', 0.35);
+        hKeyBoxBlack(k) = patch('Parent', axBwBlack, 'XData', xv, 'YData', yv, 'FaceColor', 'none', 'EdgeColor', col, 'LineWidth', lw, 'EdgeAlpha', 0.35);
+    end
+    hold(axDiff,    'off');
+    hold(axBwWhite, 'off');
+    hold(axBwBlack, 'off');
 end
 disp('Inizio processamento video...');
 
@@ -128,7 +248,14 @@ while hasFrame(video_obj)
     curr_rect = warp_image_inverse(frame, H, planeSizeMm, pixelsPerMm);
     
     % --- B. COMPONENTE SPAZIALE: Candidati (Filippo) ---
-    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D);
+    % Maschera di movimento: la mano si muove, i tasti no. Intersecando la
+    % pelle con questa maschera dentro getFingers, i tasti color avorio fermi
+    % non possono piu' essere scambiati per dita (falsi candidati a sinistra).
+    motion_mask = imabsdiff(im2gray(frame), background_gray) > MOTION_DIFF_THRESH;
+    motion_mask = imclose(motion_mask, strel('disk', 5));
+    motion_mask = imdilate(motion_mask, strel('disk', MOTION_DILATE_PX));
+
+    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D, motion_mask, FINGERTIP_MAX_ANGLE_DEG);
     
     spatial_candidates = [];
     fingertips_rect_px = [];
@@ -149,7 +276,12 @@ while hasFrame(video_obj)
         % Solo se nessun nero matcha si passa ai bianchi col poligono.
         % 80 px ~ 20 mm: la zona fy > 460 px (>~115 mm dal back) resta
         % comunque territorio bianco puro.
+        % Tolleranza Y per i neri: le nocche rilevate dall'hull si proiettano
+        % piu' in avanti del polpastrello reale (parallasse + hull = nocche).
+        % Tolleranza Y per i bianchi: stessa causa, le nocche cadono appena
+        % fuori dal poligono verso il bordo anteriore della tastiera.
         blackYTolerancePx = 80;
+        whiteYTolerancePx = 60;
         for f = 1:size(fingertips_rect_px, 1)
             fx = fingertips_rect_px(f, 1);
             fy = fingertips_rect_px(f, 2);
@@ -157,8 +289,6 @@ while hasFrame(video_obj)
             for k = 1:length(keyMap)
                 if strcmp(keyMap(k).type, 'black')
                     r = keyMap(k).BoundingBox; % [x y w h]
-                    % Match solo se il dito cade DENTRO la lamella del nero
-                    % (sia in X sia in Y, con piccola tolleranza in Y).
                     if fx >= r(1) && fx <= r(1) + r(3) && ...
                             fy >= r(2) && fy <= r(2) + r(4) + blackYTolerancePx
                         spatial_candidates = [spatial_candidates, keyMap(k).id];
@@ -173,13 +303,17 @@ while hasFrame(video_obj)
                 end
                 continue;
             end
+            % Per i bianchi usiamo fy spostato indietro di whiteYTolerancePx
+            % cosi' le nocche (proiettate troppo in avanti) rientrano nel
+            % poligono del tasto corretto.
+            fy_white = max(0, fy - whiteYTolerancePx);
             matchedWhite = false;
             for k = 1:length(keyMap)
                 if strcmp(keyMap(k).type, 'white') && ...
-                        inpolygon(fx, fy, keyMap(k).vertices(:,1), keyMap(k).vertices(:,2))
+                        inpolygon(fx, fy_white, keyMap(k).vertices(:,1), keyMap(k).vertices(:,2))
                     spatial_candidates = [spatial_candidates, keyMap(k).id];
                     matchedWhite = true;
-                    break; % un dito sta su UN solo tasto bianco
+                    break;
                 end
             end
             if DEBUG_DIFF && ~matchedWhite
@@ -187,7 +321,53 @@ while hasFrame(video_obj)
             end
         end
     end
+
+    % --- Tolleranza vicini: ogni tasto colpito da una punta porta con se'
+    %     i suoi FINGERTIP_NEIGHBOR_RADIUS vicini geometrici (adiacenti in
+    %     ordine X, qualsiasi tipo). Si espandono SOLO i tasti effettivamente
+    %     colpiti dalle punte, prima dell'espansione per-mano sottostante.
+    if FINGERTIP_NEIGHBOR_RADIUS > 0 && ~isempty(spatial_candidates)
+        matched_keys = spatial_candidates;
+        for m = matched_keys
+            pos = keyRankX(m);
+            lo  = max(1, pos - FINGERTIP_NEIGHBOR_RADIUS);
+            hi  = min(numel(keyOrderX), pos + FINGERTIP_NEIGHBOR_RADIUS);
+            spatial_candidates = [spatial_candidates, keyOrderX(lo:hi)];
+        end
+    end
     spatial_candidates = unique(spatial_candidates);
+
+    % Espansione dei candidati spaziali per mano separata.
+    % I candidati vengono ordinati per X e divisi in gruppi: un gap
+    % orizzontale > HAND_GAP_THRESH indica il vuoto tra le due mani.
+    % Ogni gruppo viene espanso separatamente, cosi' non si includono i
+    % tasti nel mezzo tra mano sinistra e mano destra.
+    if EXPAND_CANDIDATES_PER_HAND && length(spatial_candidates) >= 2
+        key_width_px   = WHITE_KEY_WIDTH_MM * PIXELS_PER_MM;
+        HAND_GAP_THRESH = 3 * key_width_px;   % >3 tasti bianchi = cambio di mano
+
+        x_centers  = arrayfun(@(k) keyMap(k).BoundingBox(1) + keyMap(k).BoundingBox(3)/2, spatial_candidates);
+        [~, sidx]  = sort(x_centers);
+        cands_sort = spatial_candidates(sidx);
+        x_sort     = x_centers(sidx);
+
+        % Trova i punti di separazione tra i gruppi (mani)
+        breaks = [0, find(diff(x_sort) > HAND_GAP_THRESH), length(cands_sort)];
+
+        expanded = [];
+        for g = 1:length(breaks)-1
+            grp     = cands_sort(breaks(g)+1 : breaks(g+1));
+            x_left  = min(arrayfun(@(k) keyMap(k).BoundingBox(1), grp));
+            x_right = max(arrayfun(@(k) keyMap(k).BoundingBox(1) + keyMap(k).BoundingBox(3), grp));
+            for k = 1:length(keyMap)
+                bb = keyMap(k).BoundingBox;
+                if bb(1) < x_right && (bb(1) + bb(3)) > x_left
+                    expanded = [expanded, k];
+                end
+            end
+        end
+        spatial_candidates = unique(expanded);
+    end
 
     % --- C. COMPONENTE TEMPORALE: Conferma (Emanuele) ---
     % Rettifichiamo la skin mask con la stessa omografia del frame in modo
@@ -199,10 +379,38 @@ while hasFrame(video_obj)
                                     H, planeSizeMm, pixelsPerMm);
         skin_mask_rect = warped > 127;
     end
-    if DEBUG_DIFF
-        [temporal_candidates, diffDebug] = detectPressedKeys(curr_rect, ref_rect, keyMap, skin_mask_rect);
+    % Calcolo adattivo del limite verticale di analisi.
+    % Usa la Y minima dei polpastrelli proiettati (fingertips_rect_px) come
+    % stima del bordo superiore della mano nel frame rettificato.
+    % La skin mask warped NON e' adatta a questo scopo: l'omografia H e'
+    % calibrata sul piano dei tasti, ma la mano e' fisicamente sopra quel
+    % piano (parallasse) → la proiezione sposta i pixel di pelle verso l'alto
+    % (piccola Y), rendendo top_skin_row troppo piccolo e la linea sempre in cima.
+    % fingertips_rect_px invece riflette la posizione visiva della mano.
+    % Fallback al fisso 1/3 se nessun polpastrello e' rilevato.
+    if ~isempty(fingertips_rect_px)
+        top_finger_y  = min(fingertips_rect_px(:, 2));
+        adaptive_rows = max(top_finger_y - ANALYSIS_MARGIN_PX, ...
+                            floor(size(curr_rect, 1) * MIN_ANALYSIS_FRAC));
     else
-        temporal_candidates = detectPressedKeys(curr_rect, ref_rect, keyMap, skin_mask_rect);
+        adaptive_rows = floor(size(curr_rect, 1) / 3);
+    end
+
+    % Grid shift per la componente temporale: trasla le ROI nella direzione
+    % dell'ombra cosi' ogni tasto cattura la propria variazione di luminanza.
+    % La componente spaziale continua a usare keyMap originale (non shiftata).
+    keyMapTemporal = keyMap;
+    if GRID_SHIFT_X_PX ~= 0 || GRID_SHIFT_Y_PX ~= 0
+        for k = 1:length(keyMapTemporal)
+            keyMapTemporal(k).BoundingBox(1) = keyMapTemporal(k).BoundingBox(1) + GRID_SHIFT_X_PX;
+            keyMapTemporal(k).BoundingBox(2) = keyMapTemporal(k).BoundingBox(2) + GRID_SHIFT_Y_PX;
+        end
+    end
+
+    if DEBUG_DIFF
+        [temporal_candidates, diffDebug] = detectPressedKeys(curr_rect, ref_rect, keyMapTemporal, skin_mask_rect, adaptive_rows, white_thresh_map, black_thresh_map);
+    else
+        temporal_candidates = detectPressedKeys(curr_rect, ref_rect, keyMapTemporal, skin_mask_rect, adaptive_rows, white_thresh_map, black_thresh_map);
     end
     
     % --- D. INTERSEZIONE (La vera magia) ---
@@ -210,29 +418,62 @@ while hasFrame(video_obj)
     pressed_keys = intersect(temporal_candidates, spatial_candidates);
 
     % --- E. VISUALIZZAZIONE ---
-    % Mostriamo il risultato finale sull'immagine rettificata
-    imshow(curr_rect, 'Parent', ax); hold(ax, 'on');
-    
+    % Riempimento PRECISO dei tasti premuti: invece di un rettangolo uniforme,
+    % coloriamo solo i pixel della superficie giusta del tasto. Dentro la
+    % bounding box (poligono) del tasto teniamo solo i pixel coerenti per
+    % luminanza: per un BIANCO escludiamo i pixel scuri (tasti neri, fessure,
+    % ombre → niente verde sopra), per un NERO escludiamo i pixel chiari
+    % (bianchi adiaciti → niente rosso sopra). Il fill viene "cotto"
+    % nell'immagine prima dell'imshow, gli overlay successivi gli stanno sopra.
+    disp_img = curr_rect;
+    if ~isa(disp_img, 'uint8'), disp_img = im2uint8(disp_img); end
+    if size(disp_img, 3) == 1, disp_img = repmat(disp_img, 1, 1, 3); end
+    [rH, rW, ~] = size(disp_img);
+    gray_rect = double(im2gray(curr_rect));   % luminanza 0..255 per la selezione
+    fillAlpha = 0.45;
+    % Escludiamo la pelle: il colore deve seguire ESCLUSIVAMENTE la superficie
+    % reale del tasto esposta, non il dito che lo copre (la cui rimozione
+    % rompe il "blocco rettangolare" e fa aderire il verde al tasto visibile).
+    notSkin = ~skin_mask_rect;
+    for id = 1:length(pressed_keys)
+        k  = pressed_keys(id);
+        regionMask = poly2mask(keyMap(k).vertices(:,1), keyMap(k).vertices(:,2), rH, rW);
+        if strcmp(keyMap(k).type, 'black')
+            fillMask = regionMask & (gray_rect <= PRESSED_FILL_BRIGHT_THRESH) & notSkin;
+            fillRGB  = [255, 0, 0];   % rosso sui neri
+        else
+            fillMask = regionMask & (gray_rect >= PRESSED_FILL_DARK_THRESH) & notSkin;
+            fillRGB  = [0, 255, 0];   % verde sui bianchi
+        end
+        for c = 1:3
+            ch = disp_img(:,:,c);
+            ch(fillMask) = uint8(fillAlpha * fillRGB(c) + (1 - fillAlpha) * double(ch(fillMask)));
+            disp_img(:,:,c) = ch;
+        end
+    end
+
+    % Mostriamo il risultato finale sull'immagine rettificata (con i fill)
+    imshow(disp_img, 'Parent', ax); hold(ax, 'on');
+
     % 1. Disegniamo i polpastrelli di Filippo proiettati
     if ~isempty(fingertips_rect_px)
         plot(ax, fingertips_rect_px(:,1), fingertips_rect_px(:,2), 'r*', 'MarkerSize', 8, 'LineWidth', 2);
     end
     
-    % 2. Disegniamo i CANDIDATI SPAZIALI (Solo tocco, no pressione) in BLU TRATTEGGIATO
-    for id = 1:length(spatial_candidates)
-        r = keyMap(spatial_candidates(id)).roi;
-        rectangle('Position', r, 'EdgeColor', 'b', 'LineWidth', 2, 'LineStyle', '--');
+    % 2. Disegniamo i CANDIDATI SPAZIALI (Solo tocco, no pressione) tratteggiati.
+    %    Bianchi in BLU, neri in GIALLO: sui tasti neri il blu si confondeva,
+    %    il giallo risalta e distingue subito quando un nero e' candidato.
+    if SHOW_SPATIAL_CANDIDATES
+        for id = 1:length(spatial_candidates)
+            r = keyMap(spatial_candidates(id)).roi;
+            candCol = 'b';
+            if strcmp(keyMap(spatial_candidates(id)).type, 'black'), candCol = 'y'; end
+            rectangle('Parent', ax, 'Position', r, 'EdgeColor', candCol, 'LineWidth', 2, 'LineStyle', '--');
+        end
     end
 
-    % 3. Disegniamo I TASTI PREMUTI CONFERMATI (Intersezione Spazio + Tempo) CON RIEMPIMENTO
-    for id = 1:length(pressed_keys)
-        r = keyMap(pressed_keys(id)).roi;
-        col = 'g'; if strcmp(keyMap(pressed_keys(id)).type, 'black'), col = 'r'; end
-        % Usiamo 'patch' per colorare l'interno del tasto in semitrasparenza
-        patch(ax, 'XData', [r(1) r(1)+r(3) r(1)+r(3) r(1)], ...
-                  'YData', [r(2) r(2) r(2)+r(4) r(2)+r(4)], ...
-                  'FaceColor', col, 'FaceAlpha', 0.4, 'EdgeColor', col, 'LineWidth', 2);
-    end
+    % 3. (nessun contorno) I tasti premuti sono gia' evidenziati dal solo
+    %    riempimento pixel-accurato applicato sopra: niente rettangolo/bordo.
     hold(ax, 'off');
 
     % --- F. DEBUG: visualizzazione frame difference ---
@@ -258,6 +499,38 @@ while hasFrame(video_obj)
         set(hDiff,    'CData', diffDebug.diff);
         set(hBwWhite, 'CData', diffDebug.bwWhite);
         set(hBwBlack, 'CData', diffDebug.bwBlack);
+
+        % Overlay stato per-tasto: coloriamo OGNI bounding box in base al
+        % rapporto pixel-on vs la sua soglia (perKeyRatio calcolato in
+        % detectPressedKeys col canale giusto per tipo). Verde pieno = sopra
+        % soglia (tasto rilevato come premuto), tenue del colore del tipo =
+        % sotto soglia. Cosi' lo stato dei neri si legge come quello dei
+        % bianchi, senza dover interpretare i pixel binari sottili.
+        for k = 1:length(keyMap)
+            if strcmp(keyMap(k).type, 'black')
+                thrK    = diffDebug.blackPixelPercent;
+                idleCol = 'y';
+            else
+                thrK    = diffDebug.whitePixelPercent;
+                idleCol = 'c';
+            end
+            if diffDebug.perKeyRatio(k) > thrK
+                edgeCol = 'g'; edgeW = 2.5; faceA = 0.30; edgeA = 1.0;
+            else
+                edgeCol = idleCol; edgeW = 0.8; faceA = 0; edgeA = 0.35;
+            end
+            set(hKeyBoxDiff(k),  'EdgeColor', edgeCol, 'LineWidth', edgeW, 'EdgeAlpha', edgeA, 'FaceColor', 'g', 'FaceAlpha', faceA);
+            set(hKeyBoxWhite(k), 'EdgeColor', edgeCol, 'LineWidth', edgeW, 'EdgeAlpha', edgeA, 'FaceColor', 'g', 'FaceAlpha', faceA);
+            set(hKeyBoxBlack(k), 'EdgeColor', edgeCol, 'LineWidth', edgeW, 'EdgeAlpha', edgeA, 'FaceColor', 'g', 'FaceAlpha', faceA);
+        end
+
+        % Aggiorna la linea ciano adattiva (una sola per pannello, creata
+        % prima del loop): mostra il bordo superiore della zona di analisi,
+        % che ora segue il punto piu' alto della mano frame per frame.
+        ar = diffDebug.analysisRows;
+        hLineAnalysisDiff.Value  = ar;
+        hLineAnalysisWhite.Value = ar;
+        hLineAnalysisBlack.Value = ar;
         % Stampa a console la % per i candidati spaziali (vediamo se i neri
         % sono vicini a passare la soglia o lontanissimi).
         if ~isempty(spatial_candidates)
