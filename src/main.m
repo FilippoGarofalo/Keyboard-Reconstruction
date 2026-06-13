@@ -24,7 +24,6 @@ MOTION_DIFF_THRESH       = 40;   % luminanza (0..255): soglia movimento mano vs 
 MOTION_DILATE_PX         = 5;     % raggio dilatazione maschera movimento (riduci per meno sbordo sui tasti vicini)
 ANALYSIS_MARGIN_PX       = 10;   % margine di sicurezza (px) sopra il bordo superiore della mano
 MIN_ANALYSIS_FRAC        = 0.15; % floor adattivo: mai meno del 15% della tastiera (evita zone troppo piccole)
-FINGERTIP_MAX_ANGLE_DEG  = 180;  % k-curvature: angolo max (gradi) perche' un vertice dell'hull conti come punta (alza se perde punte vere, abbassa se restano punti sui lati del dito)
 PRESSED_FILL_DARK_THRESH   = 60;   % visualizzazione: tasto BIANCO premuto, dal riempimento verde si escludono i pixel piu' SCURI di questo valore (0..255): cosi' il verde non sborda su tasti neri/fessure/ombre dentro la bounding box
 PRESSED_FILL_BRIGHT_THRESH = 150;  % visualizzazione: tasto NERO premuto, dal riempimento rosso si escludono i pixel piu' CHIARI di questo valore (0..255): cosi' il rosso resta sulla superficie nera e non sui bianchi adiacenti
 
@@ -226,7 +225,7 @@ while hasFrame(video_obj)
     motion_mask = imclose(motion_mask, strel('disk', 5));
     motion_mask = imdilate(motion_mask, strel('disk', MOTION_DILATE_PX));
 
-    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D, motion_mask, FINGERTIP_MAX_ANGLE_DEG);
+    [fingertips_img, skin_mask_img] = getFingers(frame .* mask_3D, motion_mask);
     
     spatial_candidates = [];
     fingertips_rect_px = [];

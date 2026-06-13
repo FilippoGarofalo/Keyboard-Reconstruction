@@ -1,21 +1,14 @@
-function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask, tipMaxAngleDeg)
+function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask)
     % GETFINGERS Detects convex fingertip coordinates from a single frame.
     %
     % Inputs:
     %   img_RGB        - Frame to process (H x W x 3).
-    %   motion_mask    - (Optional) Logical H x W mask of moving pixels. 
+    %   motion_mask    - (Optional) Logical H x W mask of moving pixels.
     %                    Enforces the constraint: hands move, keys do not.
-    %   tipMaxAngleDeg - (Optional, default 65) k-curvature threshold. 
-    %                    Discards straight finger edges (~180 deg) to isolate 
-    %                    sharp protruding fingertips (~30-60 deg).
     %
     % Outputs:
     %   fingertips - N x 2 matrix of [x, y] coordinates (physical apex of tips).
     %   skin_mask  - Logical H x W mask of skin pixels (post morphology).
-
-    if nargin < 3 || isempty(tipMaxAngleDeg)
-        tipMaxAngleDeg = 65;
-    end
 
     fingertips = [];
     skin_mask = false(size(img_RGB, 1), size(img_RGB, 2));
@@ -128,7 +121,7 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask, tipMaxAngleD
         hull_x = hull_x(1:stack_size);
         hull_y = hull_y(1:stack_size);
         
-        % 3. Anatomical Filtering (Horizontal Bisector & k-curvature)
+        % 3. Anatomical Filtering (Horizontal Bisector)
         raw_tip_x = [];
         raw_tip_y_img = [];
         robust_mid_y = median(y);
@@ -136,11 +129,6 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask, tipMaxAngleD
         for j = 1:length(hull_y)
             % Discard wrist/palm (below median y-coordinate)
             if hull_y(j) <= robust_mid_y
-                continue;
-            end
-            
-            % Discard straight finger edges
-            if hull_vertex_angle(hull_x, hull_y, j) > tipMaxAngleDeg
                 continue;
             end
             raw_tip_x(end+1) = hull_x(j);
@@ -184,38 +172,4 @@ function [fingertips, skin_mask] = getFingers(img_RGB, motion_mask, tipMaxAngleD
             end
         end
     end
-end
-
-function ang = hull_vertex_angle(hx, hy, j)
-    % Calculates angle (degrees) at vertex j to filter ~180 deg straight edges.
-    NEIGH_DIST = 15; 
-    n = numel(hx);
-    px = hx(j); py = hy(j);
-
-    prev = j;
-    for s = 1:n-1
-        cand = mod(j - 1 - s, n) + 1;
-        if hypot(hx(cand) - px, hy(cand) - py) >= NEIGH_DIST
-            prev = cand;
-            break;
-        end
-    end
-    nxt = j;
-    for s = 1:n-1
-        cand = mod(j - 1 + s, n) + 1;
-        if hypot(hx(cand) - px, hy(cand) - py) >= NEIGH_DIST
-            nxt = cand;
-            break;
-        end
-    end
-
-    if prev == j || nxt == j
-        ang = 180;
-        return;
-    end
-
-    v1 = [hx(prev) - px, hy(prev) - py];
-    v2 = [hx(nxt) - px, hy(nxt) - py];
-    c  = dot(v1, v2) / (norm(v1) * norm(v2));
-    ang = acosd(max(-1, min(1, c)));
 end
