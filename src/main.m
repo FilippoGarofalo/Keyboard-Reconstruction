@@ -10,8 +10,8 @@ addpath(genpath(script_dir));
 
 %% 2. Parameters
 
-VIDEO_NAME               = 'Video4.mp4';  
-FORCE_RECALIBRATE        = false;
+VIDEO_NAME               = 'Video3.mp4';  
+FORCE_RECALIBRATE        = true;
 
 % Keyboard model parameters
 NUM_WHITE_KEYS           = 14;

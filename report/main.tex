@@ -1,5 +1,4 @@
 \documentclass[11pt]{article}
-
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[margin=2.4cm]{geometry}
@@ -12,20 +11,32 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{caption}
 \captionsetup{font=small,labelfont=bf}
+\usepackage[section]{placeins}
+
+% Let large figures actually sit on text pages instead of drifting to the end.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.6}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.75}
 
 % Figures: keyboard frames live in ../assets, exported result frames in figures/
+% (regenerate with src/export_report_figures.m)
 \graphicspath{{figures/}{../assets/}}
 
-% Placeholder box for figures still to be exported from MATLAB.
-% Replace each \figplaceholder{...} with \includegraphics[width=\textwidth]{yourfile}.
-\newcommand{\figplaceholder}[1]{%
-  \fbox{\begin{minipage}[c][0.32\textwidth][c]{0.96\textwidth}%
-    \centering\itshape\small TODO: export from MATLAB\\[2pt]#1%
-  \end{minipage}}%
-}
+% --- Local-build fallback: missing figures render as a placeholder box instead
+% of aborting compilation. Existing images (found in . / figures/ / ../assets/)
+% are shown normally, so this is harmless on Overleaf and for teammates.
+\makeatletter
+\let\orig@includegraphics\includegraphics
+\renewcommand{\includegraphics}[2][]{%
+  \IfFileExists{#2}{\orig@includegraphics[#1]{#2}}{%
+   \IfFileExists{figures/#2}{\orig@includegraphics[#1]{#2}}{%
+    \IfFileExists{../assets/#2}{\orig@includegraphics[#1]{#2}}{%
+     \fbox{\parbox[c][0.22\textwidth][c]{0.9\linewidth}{\centering\ttfamily [figura mancante: \detokenize{#2}]}}}}}}
+\makeatother
 
 % =====================================================================
-% TITLE BLOCK  ---  FILL IN the surnames, course and date as you like.
+% TITLE BLOCK
 % =====================================================================
 \title{\textbf{Visual reconstruction of played notes on a piano keyboard\\
 from a single top-view video}}
@@ -33,7 +44,7 @@ from a single top-view video}}
   Flavio De Lellis \and
   Filippo Garofalo \and
   Emanuele Turbanti \\[4pt]
-  \small Image Analysis and Computer Vision -- Politecnico di Milano % TODO course/professor
+  \small Image Analysis and Computer Vision, Politecnico di Milano
 }
 \date{\today} % TODO set the delivery date
 
@@ -51,8 +62,9 @@ rectified through a homography that we estimate from scratch with a normalized
 Direct Linear Transform, and the key grid is then built analytically in
 millimetres so that both white \emph{and} black keys are modelled. Second, the
 press decision combines a spatial cue (a finger lies on the key) with a temporal
-cue (the key surface actually changed), where the temporal stage uses a signed
-frame difference that treats white and black keys with opposite polarity. A key
+cue (the key surface actually changed), where the temporal stage uses a
+two-channel frame difference, darkening for white keys and signal magnitude for
+black, measured only on each key's exposed surface. A key
 is reported as pressed only when both cues agree. We tested the method on five
 videos with very different lighting, backgrounds and hand styles.
 \end{abstract}
@@ -149,20 +161,13 @@ height is $150$ mm.
 The homography is then estimated with a Direct Linear
 Transform~\cite{hartley2004multiple}. Each correspondence contributes two rows to
 a $2n \times 9$ matrix $\mathtt{A}$,
-\begin{equation}
-\begin{aligned}
-  &[-X,\,-Y,\,-1,\;0,\,0,\,0,\; xX,\,xY,\,x],\\
-  &[\;0,\,0,\,0,\,-X,\,-Y,\,-1,\; yX,\,yY,\,y],
-\end{aligned}
-\end{equation}
+
 and the solution is the right singular vector of $\mathtt{A}$ associated with the
 smallest singular value, reshaped into the $3\times 3$ matrix $\mathtt{H}$ and
 scaled so that $H_{33}=1$. We keep both $\mathtt{H}$ and its inverse, since the
 two branches need opposite directions: rectifying an image needs plane to image,
 while mapping a detected fingertip back onto the keyboard needs image to plane.
-As a sanity check the calibration also reports the mean and maximum reprojection
-error of the four corners in pixels; on our videos this stayed well under one
-pixel, as expected when the input points are the same four points used to fit.
+
 
 Rectification itself is done by inverse warping. We build the output grid in the
 metric plane at a chosen resolution (we used $4$ pixels per millimetre), send
@@ -173,30 +178,29 @@ mask: anything outside the clicked quadrilateral, in particular the red felt
 strip above the keys that otherwise pollutes skin detection, is discarded before
 segmentation. Figure~\ref{fig:rectify} shows the result on one of our frames.
 
-\begin{figure}[t]
+\begin{figure}[!htb]
 \centering
-\begin{subfigure}{0.6\textwidth}
+\begin{subfigure}[t]{0.46\textwidth}
   \centering
   \includegraphics[width=\textwidth]{calib_corners.png}
   \caption{Source frame with the four clicked corners (red) and the resulting
   white-key quadrilateral (green), which also serves as the region of interest.}
   \label{fig:rectify-corners}
-\end{subfigure}
-
-\vspace{6pt}
-\begin{subfigure}{\textwidth}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.52\textwidth}
   \centering
   \includegraphics[width=\textwidth]{calib_rectified.png}
   \caption{The same region after inverse warping with $\mathtt{H}$: a metric,
   top-down view of the keys at $4$ pixels per millimetre.}
   \label{fig:rectify-rect}
 \end{subfigure}
-\caption{Calibration and rectification on a frame of one test video ($21$ white
-keys, leftmost note F). The homography straightens the slanted keyboard into the
+\caption{Calibration and rectification on a frame of one test video ($14$ white
+keys, leftmost note C). The homography straightens the slanted keyboard into the
 rectangular plane on which every later stage operates.}
 \label{fig:rectify}
 \end{figure}
 
+\FloatBarrier
 \subsection{The virtual keyboard model}
 Once the plane is metric we never measure key positions from the image again. We
 generate them. White keys are an even partition of the calibrated width into
@@ -206,17 +210,7 @@ meaning a black key sits to the right of that white). The pattern is rotated to
 start on the leftmost visible note, which the user supplies, and tiled across the
 visible range.
 
-Inside each contiguous group of black keys (a pair for C\#/D\#, a triple for
-F\#/G\#/A\#) we do not assume the blacks are centred on the white-white seams,
-because they are not. We require instead that every white key shows the same
-visible width below the black band, which gives, for a group of $N$ blacks of
-width $w_b$ on white keys of width $w_w$,
-\begin{equation}
-  \text{gap} = w_w - \frac{N\,w_b}{N+1},\qquad
-  c_i = x_{\text{left}} + i\cdot\text{gap} + \Big(i-\tfrac12\Big) w_b,
-  \quad i=1,\dots,N,
-\end{equation}
-where $c_i$ is the centre of the $i$-th black key in the group. The constants
+The constants
 ($w_w=23.5$ mm, $w_b=13.7$ mm, white length $150$ mm, black length $95$ mm) live
 in a single file, so changing the geometry propagates everywhere with no manual
 retuning. The end product is one array of keys, each carrying its polygon both
@@ -226,16 +220,14 @@ keys at all is something the reference projects we looked at left as future work
 and the analytic placement is what made it tractable for us.
 Figure~\ref{fig:vkgrid} overlays the generated grid on the rectified plane.
 
-\begin{figure}[t]
+\begin{figure}[!htb]
 \centering
-\includegraphics[width=\textwidth]{calib_grid.png}
-\caption{The virtual keyboard model drawn over the rectified plane: white-key
-columns in cyan and the $15$ analytically placed black keys in yellow. The grid
-is computed from the two physical dimensions and the octave pattern, not measured
-from the image.}
+\includegraphics[width=0.82\textwidth]{calib_grid.png}
+\caption{The virtual keyboard model drawn over the rectified plane}
 \label{fig:vkgrid}
 \end{figure}
 
+\FloatBarrier
 \subsection{Spatial branch: from pixels to candidate keys}
 \label{sec:spatial}
 The spatial branch answers a narrow question, which keys have a finger over them,
@@ -331,47 +323,86 @@ empty gap between the two hands is logically preserved.
 \label{sec:temporal}
 The spatial branch cannot tell a pressed key from a key merely touched, because
 from above they look almost identical. The temporal branch resolves this by
-comparing each frame against the resting reference, which we take to be the first
-rectified frame. Crucially, the first frame is allowed to contain hands, as long
-as the keys are at rest, which makes the method usable on real footage that never
-starts on an empty keyboard.
+comparing each frame against a resting reference, which we take to be the first
+rectified frame. This reference must be a clean frame: the keyboard at rest and
+\emph{no hands on it}. Since every later frame is judged against it, a hand or an
+already-pressed key present in the reference would corrupt the baseline and leak
+into the difference as a spurious change. We therefore require the video to begin
+on such a frame, before the player's hands enter the keyboard.
 
-We work with a \emph{signed} grayscale difference, not the absolute one, and this
-is the part we are most happy with. Let $g = \text{gray}(\text{current}) -
-\text{gray}(\text{reference})$. A finger is darker than a white key, so pressing
-a white key makes its surface get darker, $g<0$. A finger or its skin is lighter
-than a black key, so a black press makes the surface get lighter, $g>0$. We
-therefore split the signal by sign:
+From a grayscale difference $g = \text{gray}(\text{current}) -
+\text{gray}(\text{reference})$ we build two complementary channels, one per key
+type, because white and black keys change in opposite ways. A white key is light
+(ivory), and a press darkens its surface: both the finger and the contact shadow
+it casts are darker than the key, so on a white key a press appears as a drop in
+brightness ($g<0$). The white channel therefore keeps only the darkened pixels and
+discards any brightening, which on a white key is almost always spurious. A black
+key is the opposite case: it is dark and narrow, so its press signal is weak and
+goes \emph{both} ways --- the contact shadow darkens its edges, while skin and
+reflections at the borders can lighten it. Keeping the brightening alone lost most
+black presses, so the black channel takes the full \emph{magnitude} of $g$:
 \begin{equation}
   d_{\text{white}} = \frac{\max(0,-g)}{255}, \qquad
-  d_{\text{black}} = \frac{\max(0,\;g)}{255}.
+  d_{\text{black}} = \frac{|g|}{255}.
 \end{equation}
-The benefit is that the two key types stop interfering. When a white key is
-pressed, the darkening it produces, and the darkening that bleeds onto its
-neighbours, only ever feeds the white channel, so it cannot raise a false alarm
-on the black channel, and the other way round. The skin mask is subtracted from
-the white channel only, to stop the moving hand from registering as a press on
-nearby whites; on the black channel the skin \emph{is} the useful signal, so we
-leave it.
 
-Each channel is thresholded ($20/255$ for white, $25/255$ for black), opened with
-a small disk to kill speckle, and then, for every key, we look at the fraction of
-``on'' pixels inside its region. We shrink each region by a two pixel inner margin
-to reduce bleed from adjacent keys, and we declare the key changed when that
-fraction passes a per-type level ($10\%$ for white, $15\%$ for black). Two extra
-refinements proved necessary in practice. First, the vertical band that we
-analyse is adaptive: instead of a fixed top third we cut just above the highest
-detected fingertip, with a floor of $15\%$ of the keyboard height, which keeps the
-moving arm out of the analysis. Second, we shift the temporal regions slightly to
-the left (about $35$ pixels) so that each key captures the shadow that a press
-casts to its side rather than the neighbour's.
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.6\textwidth]{Diff_grayscale.png}
+\caption{The grayscale difference against the resting reference, on a frame with a
+black key down. The regions that changed most --- the press and the moving hand ---
+stand out; this raw signal is what the two channels above are built from.}
+\label{fig:diff-grayscale}
+\end{figure}
 
-We also implemented an earlier variant of this stage based on a weighted mean of
-the absolute difference, with a large weight on the white-to-black horizontal
-boundary and a Canny-based weight on the lateral edges. It works, but the signed
-two-channel version above is what the integrated system runs, because it
-generalises to black keys and needs less tuning.
+A finger over a key is not, by itself, a press: it may merely rest on it or pass
+above it. What marks a real press is that the \emph{exposed} surface of the key
+changes, through the contact shadow and the slight displacement of the key. We
+therefore remove the skin (the hand mask, warped into the rectified plane) from
+\emph{both} channels, so each key is judged only on the part of its surface the
+finger does not cover, never on the finger itself.
 
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.6\textwidth]{Skinmask.png}
+\caption{The skin mask, warped into the rectified plane. These pixels are removed
+from both channels, so a finger covering a key is never counted as a change of the
+key surface.}
+\label{fig:skinmask}
+\end{figure}
+
+Each channel is then binarized against a per-type threshold --- a tunable
+parameter, set to $30/255$ in most of our runs --- and the resulting binary mask is
+cleaned of isolated noise pixels.
+Then, for every key, we restrict the analysis to the adaptive band described below,
+shrink the region by a two-pixel inner margin to reduce bleed from neighbours, 
+and compute the fraction of changed pixels \emph{over the exposed area} of the key,
+\begin{equation}
+  r_k = \frac{\text{changed, non-skin pixels}}{\text{non-skin (exposed) pixels}},
+\end{equation}
+declaring the key changed when $r_k$ passes a per-type level ($10\%$ for white,
+$20\%$ for black). Normalising over the exposed area, rather than the whole
+region, is what lets us strip the skin without diluting the score: on a narrow
+black key the finger covers most of the surface, and dividing by the full region
+would drag every ratio below threshold. A guard abstains when too few exposed
+pixels remain. The analysis band is the key safeguard here: rather than a fixed
+top third as in previous solutions, it tracks the highest detected fingertip frame
+by frame and cuts just above it (with a floor of $15\%$ of the keyboard height),
+so the fingers and --- under proper frontal lighting, where they fall below the 
+contact point --- their cast shadows are left out of the per-key statistics entirely.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.8\textwidth]{FDiff_Thresholds.png}
+  \caption{The two channels after thresholding, with the per-type thresholds marked.
+  Note that the black key pressing is highlighted in both channels, while the hand
+  and its shadow are removed by the skin mask.
+  Also, some noise appears on the black keys due to lighting changes, but it is
+  filtered out by the spatial branch AND the adaptive band.}
+  \label{fig:fdiff-thresholds}
+\end{figure}
+
+\FloatBarrier
 \subsection{Fusion}
 \label{sec:fusion}
 The two branches each return a set of key indices. The reported pressed keys are
@@ -379,9 +410,8 @@ their intersection: a key must have a fingertip over it \emph{and} have changed
 with respect to rest. This single AND is what removes the bulk of the false
 positives, since a hovering hand satisfies the spatial test but not the temporal
 one, and a shadow or reflection satisfies neither cleanly. The final overlay
-draws the spatial candidates as dashed outlines and the confirmed presses as
-filled regions, white presses in green and black presses in red, on top of the
-rectified frame.
+marks the projected fingertips and fills the confirmed presses, green on white
+keys and red on black ones, on top of the rectified frame.
 
 \section{Experiments and results}
 \label{sec:results}
@@ -391,28 +421,46 @@ in lighting, in background clutter, in whether the instrument is an acoustic
 grand or an electronic keyboard, and in hand morphology and posture. All of them
 start on a resting frame, which the temporal stage needs as its reference. Three
 are representative enough to describe here, and Figure~\ref{fig:result} shows the
-final output on one of them.
+final output on two frames of one of them.
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
-\begin{minipage}{0.7\textwidth}
-\figplaceholder{processed frame with candidates and confirmed presses}
-\end{minipage}
-\caption{A processed frame. Dashed outlines are spatial candidates, filled
-regions are confirmed presses (green for white keys, red for black). (Export from
-MATLAB and replace.)}
+\begin{subfigure}{0.49\textwidth}
+  \centering
+  \includegraphics[width=\textwidth]{White_Key_pressed.png}
+  \caption{A confirmed white-key press.}
+  \label{fig:result-a}
+\end{subfigure}\hfill
+\begin{subfigure}{0.49\textwidth}
+  \centering
+  \includegraphics[width=\textwidth]{Black_Key_pressed.png}
+  \caption{A confirmed black-key press.}
+  \label{fig:result-b}
+\end{subfigure}
+\caption{Final output on two processed frames. Confirmed presses are filled,
+green on white keys and red on black ones; the red stars are the fingertips
+after projection onto the rectified plane. The fill follows the visible key
+surface rather than the bounding box, so it stops at the finger and at the
+neighbouring keys.}
 \label{fig:result}
 \end{figure}
 
-The first video shows a baby grand under good, high-contrast light, but the
+The first video shows a baby grand under high-contrast light. Here, the
 camera is clearly off the keyboard normal, so the projective distortion is large.
 This makes it a good test of the calibration: once rectified, the keys line up
 with the virtual grid and the rest of the pipeline behaves as if the camera had
 been overhead. The pianist plays with a pronounced claw posture, so several
-fingertips are hidden and the convex hull misses them; the presses are still
-recovered because the temporal change on those keys is unambiguous, and the
-intersection keeps them as long as \emph{some} fingertip in the group survived
-the expansion step.
+fingertips are hidden and the convex hull misses them. Because a press needs both
+cues, a key whose fingertip is missed is not reported, even when its surface has
+clearly changed: this posture is exactly where the spatial branch limits recall.
+Where a fingertip is still detected, the press is confirmed cleanly, since the
+temporal change on that key is unambiguous.
+One interesting detail is that the system picks up noise from the reflection of 
+the light on the glossy surface. This noise is caused by the a change of the 
+lighting condition on the keys, which is not related to the presence of a finger.
+It highlights the importance of the skin-and-motion intersection: the reflection
+alone would trigger the temporal branch, but it never enters the spatial branch, 
+so it is filtered out at the end.
 
 The second video is an electronic keyboard against a busy, multicoloured
 background, with shadows between the black keys. The camera here is close to an
@@ -440,7 +488,7 @@ was the right call.
 We built a single-camera, no-learning pipeline that reports pressed piano keys
 from a top-view video, using a from-scratch homography for rectification, an
 analytic virtual keyboard that includes black keys, a convex-hull spatial branch,
-and a signed two-channel temporal branch, fused by intersection. On a varied set
+and a two-channel, exposed-surface temporal branch, fused by intersection. On a varied set
 of videos it handles white and black presses under a range of real conditions.
 
 The limitations are the ones inherent to hand-tuned classical methods. Several
