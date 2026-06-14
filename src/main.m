@@ -10,12 +10,12 @@ addpath(genpath(script_dir));
 
 %% 2. Parameters
 
-VIDEO_NAME               = 'Video3.mp4';  
+VIDEO_NAME               = 'Video1.mp4';  
 FORCE_RECALIBRATE        = true;
 
 % Keyboard model parameters
-NUM_WHITE_KEYS           = 14;
-FIRST_VISIBLE_NOTE       = 'C';
+NUM_WHITE_KEYS           = 21;
+FIRST_VISIBLE_NOTE       = 'F';
 WHITE_KEY_WIDTH_MM       = 23.5;
 VISIBLE_WHITE_HEIGHT_MM  = 150;
 PIXELS_PER_MM            = 4;
