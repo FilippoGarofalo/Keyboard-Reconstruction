@@ -110,7 +110,7 @@ ax = axes('Parent', fig);
 % Finestra di debug: diff grayscale + maschere binarie per-tipo.
 % Flag di sviluppo: tienilo false per la versione "pulita"; mettilo true per
 % riaprire la finestra a 4 pannelli e il log a console durante la taratura.
-DEBUG_DIFF = true;
+DEBUG_DIFF = false;
 
 % Overlay candidati spaziali (rettangoli tratteggiati: blu=bianchi, giallo=neri)
 SHOW_SPATIAL_CANDIDATES = false;
