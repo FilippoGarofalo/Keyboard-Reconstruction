@@ -80,7 +80,7 @@ finger responsible for it visible.
 
 The motivation comes mostly from Music Information Retrieval, where automatic
 transcription tries to turn a performance into a symbolic score or a MIDI
-file~\cite{benetos2019transcription}. Audio based transcription is the usual
+file. Audio based transcription is the usual
 route, but it has well known trouble with dense polyphony, with notes that
 overlap and with instruments that are slightly out of tune. Looking at the
 player's hands sidesteps part of that, because the physical contact between a
@@ -101,7 +101,7 @@ method that copes with this is a method that copes with a lot.
 We stay deliberately on the cheap end of the hardware spectrum: a single RGB
 camera, no depth sensor and no second viewpoint, and no learned component
 anywhere in the chain. Adding hardware would make the problem easier (a frontal
-camera or a depth sensor measures key travel directly~\cite{akbari2015pianodepth},
+camera or a depth sensor measures key travel directly,
 and a CNN could absorb much of the appearance variation), but each of those
 options carries a cost, in equipment or in annotated data, that a setup meant to
 run on footage anyone can shoot should not assume. Working inside that
@@ -159,7 +159,7 @@ metric rectangle whose width is (number of white keys) $\times 23.5$ mm and whos
 height is $150$ mm.
 
 The homography is then estimated with a Direct Linear
-Transform~\cite{hartley2004multiple}. Each correspondence contributes two rows to
+Transform. Each correspondence contributes two rows to
 a $2n \times 9$ matrix $\mathtt{A}$,
 
 and the solution is the right singular vector of $\mathtt{A}$ associated with the
@@ -216,7 +216,7 @@ in a single file, so changing the geometry propagates everywhere with no manual
 retuning. The end product is one array of keys, each carrying its polygon both
 in millimetres and in rectified pixels, its bounding box and its type. This is
 the shared map that the spatial and temporal branches both query. Handling black
-keys at all is something the reference projects we looked at left as future work,
+keys at all is something the reference project we looked at~\cite{digennaro2026visual} left as future work,
 and the analytic placement is what made it tractable for us.
 Figure~\ref{fig:vkgrid} overlays the generated grid on the rectified plane.
 
@@ -235,7 +235,7 @@ and it is allowed to over-answer, since the temporal branch will prune it.
 
 \paragraph{Skin and motion.}
 Skin is segmented in YCbCr, which separates luminance from chrominance and is a
-common choice for this exact task~\cite{benabdelkader2005ycbcr}. We keep pixels
+common choice for this exact task. We keep pixels
 with $Y\in[100,235]$, $C_b\in[85,135]$, $C_r\in[135,180]$. On its own this also
 fires on ivory keys, whose colour is close to pale skin, so we add a simple but
 effective constraint: hands move and keys do not. We build a motion mask by thresholding 
@@ -263,7 +263,7 @@ convex hull of each hand blob. Intuitively, the convex hull is the shape a rubbe
 band would take if stretched around the entire hand; the points where the band is 
 forced to bend sharply are the protruding fingertips. 
 
-We compute this using a custom implementation of the Graham scan~\cite{graham1972convexhull}. 
+We compute this using a custom implementation of the Graham scan.
 The algorithm begins by finding an anchor point guaranteed to be on the outer boundary: 
 the pixel with the lowest $y$-coordinate (the base of the hand in the image), breaking 
 ties with the smallest $x$-coordinate to yield $p_0 = (x_0, y_0)$. We then imagine a ray 
@@ -413,12 +413,12 @@ one, and a shadow or reflection satisfies neither cleanly. The final overlay
 marks the projected fingertips and fills the confirmed presses, green on white
 keys and red on black ones, on top of the rectified frame.
 
+\newpage
+
 \section{Experiments and results}
 \label{sec:results}
-We recorded and collected five videos to stress different parts of the pipeline:
-four from public online sources and one filmed by us in a normal room. They vary
-in lighting, in background clutter, in whether the instrument is an acoustic
-grand or an electronic keyboard, and in hand morphology and posture. All of them
+We recorded and collected five videos to stress different parts of the pipeline.
+They vary in lighting, in background clutter and in hand morphology and posture. All of them
 start on a resting frame, which the temporal stage needs as its reference. Three
 are representative enough to describe here, and Figure~\ref{fig:result} shows the
 final output on two frames of one of them.
@@ -437,11 +437,7 @@ final output on two frames of one of them.
   \caption{A confirmed black-key press.}
   \label{fig:result-b}
 \end{subfigure}
-\caption{Final output on two processed frames. Confirmed presses are filled,
-green on white keys and red on black ones; the red stars are the fingertips
-after projection onto the rectified plane. The fill follows the visible key
-surface rather than the bounding box, so it stops at the finger and at the
-neighbouring keys.}
+\caption{Final output on two processed frames. Confirmed presses are filled with green on white keys and red on black ones; the red stars are the fingertips after projection onto the rectified plane. The fill follows the visible key surface rather than the bounding box, so it stops at the finger and at the neighbouring keys.}
 \label{fig:result}
 \end{figure}
 
@@ -477,12 +473,12 @@ plausible presses on both.
 
 Across the set, the pipeline marks pressed white keys reliably under projective
 distortion, cluttered backgrounds, low light and two-hand play, and it also picks
-up black-key presses, which the white-only reference systems do not attempt. The
+up black-key presses, which the white-only reference system~\cite{digennaro2026visual} does not attempt. The
 honest weak point is the candidate stage on its own: it flickers frame to frame,
 and in the hardest frames it produces spurious candidates. The temporal
 verification is what tames this, and the gap between the raw candidate stream and
 the final, intersected output is the clearest evidence that the two-cue design
-was the right call.
+was the right call. \newpage
 
 \section{Conclusions and open problems}
 We built a single-camera, no-learning pipeline that reports pressed piano keys
@@ -492,22 +488,13 @@ and a two-channel, exposed-surface temporal branch, fused by intersection. On a 
 of videos it handles white and black presses under a range of real conditions.
 
 The limitations are the ones inherent to hand-tuned classical methods. Several
-thresholds (skin ranges, the motion gate, the parallax tolerances) depend on
+thresholds depend on
 lighting and on the instrument, and a genuinely new scene can need a touch of
-retuning. A learned skin or hand model would remove much of that sensitivity, at
-the price of a labelled dataset we did not have. The detection is also purely
+retuning. A learned skin or hand model would remove much of that sensitivity. The detection is also purely
 frame-by-frame: adding tracking over time would let us reconstruct note onsets
-and durations, and from there an actual transcription. Finally the field of view
-covers only part of the keyboard at once, which caps the pitch range, and the
-black-key cue, while working, is more delicate than the white one because of the
-parallax we described in Section~\ref{sec:temporal}. These are the directions we
-would take the work next.
+and durations, and from there an actual transcription.
 
-\paragraph{Contributions.}
-Flavio handled the geometric calibration, the homography and the rectification.
-Filippo built the spatial branch, the skin and motion segmentation and the convex
-hull. Emanuele developed the temporal branch and the press confirmation. The
-fusion logic and the experiments were done jointly.
+
 
 \bibliographystyle{ieeetr}
 \bibliography{references}
